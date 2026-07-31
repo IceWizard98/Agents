@@ -1,0 +1,31 @@
+# secrets
+.env
+*.local
+
+# local-only compose override (VM DNS workaround)
+docker-compose.override.yml
+
+# hermes live config (rewritten at runtime; template is config.example.yaml)
+/hermes/config.yaml
+
+# runtime volumes (never commit)
+**/repos/
+**/data/
+*.db
+*.db-*
+*.sqlite
+
+# claude sessions
+**/.claude/
+diary.md
+
+# build
+**/bin/
+*.exe
+
+# skills staging (just sync-plugins)
+.skills-dist/
+
+# service binaries
+/mcp-icloud/icloud-smtp
+/mcp-icloud/mcp-icloud

@@ -1,0 +1,153 @@
+# agent-system stack.
+# hermes (Nous Research) = runtime + Telegram chat + MCP client, on a Claude Code session.
+# paperclip (paperclipai) = governance/orchestration: hires hermes as a worker via the
+#   built-in `hermes_gateway` adapter, recurring tasks, budget, audit.
+# coding / jira / mcp-google / mcp-icloud = MCP servers (tools) attached to hermes.
+# Local: `docker compose up -d --build`. Coolify: import this file + env secrets.
+name: agents
+
+networks:
+  agents_net:
+    driver: bridge
+
+volumes:
+  hermes_data: {}
+  pgdata: {}
+  paperclip_data: {}
+  coding_home: {}
+  coding_repos: {}
+  google_tokens: {}
+
+services:
+  # ---- Hermes: AI worker + chat gateway (Telegram) + MCP client ----
+  hermes:
+    build: ./hermes   # official image + cont-init (seed config, apply HERMES_MODEL)
+    command: ["gateway", "run"]
+    environment:
+      # Model via OpenRouter (subscription OAuth token is banned for third-party apps).
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - HERMES_MODEL=${HERMES_MODEL:-anthropic/claude-opus-4.8}
+      # API server: used by paperclip to call hermes (hermes_gateway adapter).
+      - API_SERVER_ENABLED=true
+      - API_SERVER_KEY=${API_SERVER_KEY}
+      # Telegram channel.
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}
+      - TELEGRAM_HOME_CHANNEL=${TELEGRAM_HOME_CHANNEL}
+    volumes:
+      # config.yaml is seeded into this volume from the image template on first boot
+      # (hermes/config.example.yaml), then owned by Hermes. Model comes from HERMES_MODEL.
+      - hermes_data:/opt/data
+    networks: [agents_net]
+    ports:
+      - "9119:9119"   # dashboard, launched manually inside the container
+    # 8642 = API server (internal, for paperclip). No domain needed.
+    restart: unless-stopped
+    depends_on:
+      coding:
+        condition: service_healthy
+      github-mcp:
+        condition: service_healthy
+      jira:
+        condition: service_started
+      mcp-google:
+        condition: service_started
+      mcp-icloud:
+        condition: service_started
+
+  # ---- Paperclip: orchestration, governance, recurring tasks ----
+  paperclip-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [agents_net]
+    restart: unless-stopped
+
+  paperclip:
+    # Official published image. Tag overridable to test versions (PAPERCLIP_IMAGE).
+    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
+    environment:
+      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Lets the built-in claude_local adapter run Claude Code on your subscription
+      # (genuine Claude Code binary — allowed). Try an agent without wiring Hermes.
+      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
+    volumes:
+      - paperclip_data:/paperclip
+    networks: [agents_net]
+    ports:
+      - "3100:3100"   # Coolify: map to a domain (governance dashboard)
+    depends_on:
+      paperclip-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---- MCP servers (hermes tools) ----
+  # coding: Claude Code CLI via `claude mcp serve`, bridged to HTTP by supergateway.
+  coding:
+    build: ./coding
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL}
+      - PORT=9100
+    volumes:
+      - coding_home:/home/app/.claude
+      - coding_repos:/work
+    networks: [agents_net]
+    restart: unless-stopped
+
+  # github-mcp: official GitHub MCP server (branch/commit/PR via API), self-hosted.
+  github-mcp:
+    build: ./github-mcp
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}
+      # Restrict surface: repos (branch/commit/file) + pull_requests only.
+      # NB: merge/delete still live inside these toolsets; for true no-merge use
+      # branch protection or a PAT without merge permission.
+      - GITHUB_TOOLSETS=repos,pull_requests
+      - PORT=9400
+    networks: [agents_net]
+    restart: unless-stopped
+
+  jira:
+    build: ./jira
+    environment:
+      - JIRA_URL=${JIRA_URL}
+      - JIRA_EMAIL=${JIRA_EMAIL}
+      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+    networks: [agents_net]
+    restart: unless-stopped
+
+  mcp-google:
+    build: ./mcp-google
+    environment:
+      - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
+      - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
+    volumes:
+      - google_tokens:/data
+    networks: [agents_net]
+    restart: unless-stopped
+
+  mcp-icloud:
+    build: ./mcp-icloud
+    environment:
+      - ICLOUD_SMTP_USER=${ICLOUD_SMTP_USER}
+      - ICLOUD_SMTP_APP_PASSWORD=${ICLOUD_SMTP_APP_PASSWORD}
+    networks: [agents_net]
+    restart: unless-stopped
