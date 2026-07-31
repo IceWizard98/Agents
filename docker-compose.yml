@@ -159,6 +159,10 @@ services:
       - JIRA_URL=${JIRA_URL}
       - JIRA_EMAIL=${JIRA_EMAIL}
       - JIRA_API_TOKEN=${JIRA_API_TOKEN}
+      # Single-user deployment: Hermes calls without per-user identity headers.
+      # Let mcp-atlassian serve those requests with the operator's global creds
+      # (otherwise UserTokenMiddleware rejects every request with 401).
+      - ALLOW_GLOBAL_CRED_FALLBACK=true
     networks: [agents_net]
     restart: unless-stopped
 
