@@ -116,6 +116,9 @@ services:
       # var that tells paperclip which origin is valid — for both purposes.
       - ./paperclip/patch-hosts-entrypoint.sh:/usr/local/bin/patch-hosts-entrypoint.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/patch-hosts-entrypoint.sh"]
+    # Overriding entrypoint drops the image's default CMD, so it must be restated
+    # here verbatim (see `docker inspect ghcr.io/paperclipai/paperclip` Cmd).
+    command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
     networks: [agents_net]
     ports:
       - "3100:3100"   # Coolify: map to a domain (governance dashboard)
