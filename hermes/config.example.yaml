@@ -1,0 +1,51 @@
+# Hermes config template. Copy to config.yaml (gitignored) on setup:
+#   cp hermes/config.example.yaml hermes/config.yaml
+# Hermes rewrites config.yaml at runtime (migrate, /sethome, ...), so the live
+# file is not versioned — only this template is. Secrets stay in .env, not here.
+
+# Model: Claude via OpenRouter (OPENROUTER_API_KEY in env). The Claude Code
+# subscription OAuth token is NOT usable here — Anthropic bans third-party OAuth use
+# (only the genuine Claude Code binary in the `coding` container still uses it).
+model:
+  provider: openrouter
+  # Primary model. Change it with `just set-model` (reads HERMES_MODEL from .env)
+  # — Hermes does NOT expand ${VARS} in this field at call time.
+  # Free models are rate-limited (429) — the fallback below is a SECOND free model
+  # so a saturated primary rolls over instead of failing. For heavier use switch to
+  # a cheap paid one (anthropic/claude-... or google/gemini-2.5-flash) via `just set-model`.
+  default: google/gemma-4-26b-a4b-it:free
+
+# Failover on 429/503/529/connection error. Kept free too (all-free stack).
+fallback_model:
+  provider: openrouter
+  model: poolside/laguna-s-2.1:free
+
+# Telegram is activated by the TELEGRAM_* env vars; Hermes also records the
+# home channel here after /sethome.
+platforms:
+  telegram:
+    enabled: true
+
+# Skills pushed via `just sync-*` (mirrored). Personal and flattened plugin skills
+# live in separate dirs so one mirror can't wipe the other.
+skills:
+  external_dirs:
+    - /opt/data/skills
+    - /opt/data/plugin-skills
+
+# External tools over MCP (streamable HTTP on the agents_net network).
+# coding's `claude mcp serve` is slow to warm up on the first call — give it a
+# generous timeout so the first tool call doesn't fail.
+mcp_servers:
+  coding:
+    url: http://coding:9100/mcp
+    timeout: 180
+  github:
+    url: http://github-mcp:9400/mcp
+    timeout: 60
+  jira:
+    url: http://jira:9200/mcp
+  google:
+    url: http://mcp-google:9000/mcp
+  icloud:
+    url: http://mcp-icloud:9001/mcp
