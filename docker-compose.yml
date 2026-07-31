@@ -88,6 +88,13 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
     volumes:
       - paperclip_data:/paperclip
+      # Patches /etc/hosts at container start so paperclip's own self-calls to its
+      # PAPERCLIP_PUBLIC_URL hostname resolve to loopback instead of leaving the box
+      # and hairpinning back through an edge proxy (e.g. Cloudflare), which can
+      # block/time out non-browser requests. Reuses PAPERCLIP_PUBLIC_URL — the same
+      # var that tells paperclip which origin is valid — for both purposes.
+      - ./paperclip/patch-hosts-entrypoint.sh:/usr/local/bin/patch-hosts-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/patch-hosts-entrypoint.sh"]
     networks: [agents_net]
     ports:
       - "3100:3100"   # Coolify: map to a domain (governance dashboard)
