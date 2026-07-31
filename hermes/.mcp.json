@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "google":    { "type": "http", "url": "http://mcp-comms:9000/mcp" },
+    "google":    { "type": "http", "url": "http://mcp-google:9000/mcp" },
     "icloud":    { "type": "http", "url": "http://mcp-comms:9001/mcp" },
     "coding":    { "type": "http", "url": "http://coding:9100/mcp" },
     "jira":      { "type": "http", "url": "http://jira:9200/mcp" },

@@ -171,9 +171,14 @@ services:
     environment:
       - GOOGLE_OAUTH_CLIENT_ID=${GOOGLE_OAUTH_CLIENT_ID}
       - GOOGLE_OAUTH_CLIENT_SECRET=${GOOGLE_OAUTH_CLIENT_SECRET}
+      # Optional: pin the single-user Google account + public base URI (prod).
+      - USER_GOOGLE_EMAIL=${USER_GOOGLE_EMAIL:-}
+      - WORKSPACE_MCP_BASE_URI=${WORKSPACE_MCP_BASE_URI:-http://localhost}
     volumes:
       - google_tokens:/data
     networks: [agents_net]
+    ports:
+      - "9000:9000"   # OAuth redirect (…/oauth2callback) must reach the browser doing consent
     restart: unless-stopped
 
   mcp-icloud:
