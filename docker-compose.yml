@@ -39,9 +39,9 @@ services:
       # (hermes/config.example.yaml), then owned by Hermes. Model comes from HERMES_MODEL.
       - hermes_data:/opt/data
     networks: [agents_net]
-    ports:
-      - "9119:9119"   # dashboard, launched manually inside the container
     # 8642 = API server (internal, for paperclip). No domain needed.
+    # Dashboard (:9119) runs as a separate `hermes-dashboard` service below —
+    # `gateway run` here does not serve it.
     restart: unless-stopped
     depends_on:
       coding:
@@ -53,6 +53,27 @@ services:
       mcp-google:
         condition: service_started
       mcp-icloud:
+        condition: service_started
+
+  # Hermes dashboard (web UI): separate process from the gateway, same data
+  # volume/image. Public bind (0.0.0.0) requires an auth provider — basic auth
+  # via HERMES_DASHBOARD_BASIC_AUTH_*.
+  hermes-dashboard:
+    build: ./hermes
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--skip-build", "--no-open"]
+    environment:
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must be set}
+      - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_BASIC_AUTH_SECRET:?HERMES_DASHBOARD_BASIC_AUTH_SECRET must be set}
+      - HERMES_DASHBOARD_PUBLIC_URL=${HERMES_DASHBOARD_PUBLIC_URL:-http://localhost:9119}
+    volumes:
+      - hermes_data:/opt/data
+    networks: [agents_net]
+    ports:
+      - "9119:9119"
+    restart: unless-stopped
+    depends_on:
+      hermes:
         condition: service_started
 
   # ---- Paperclip: orchestration, governance, recurring tasks ----
