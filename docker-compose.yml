@@ -186,5 +186,6 @@ services:
     environment:
       - ICLOUD_SMTP_USER=${ICLOUD_SMTP_USER}
       - ICLOUD_SMTP_APP_PASSWORD=${ICLOUD_SMTP_APP_PASSWORD}
+      - ICLOUD_FROM=${ICLOUD_FROM:-}
     networks: [agents_net]
     restart: unless-stopped
