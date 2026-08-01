@@ -126,6 +126,14 @@ services:
       paperclip-db:
         condition: service_healthy
     restart: unless-stopped
+    # Hard ceiling independent of per-agent maxConcurrentRuns (paperclip has no
+    # global "max concurrent tasks" setting): if many agents heartbeat at once,
+    # cgroups queue instead of the host OOM-thrashing (0 swap, 4 cores).
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G
 
   # ---- MCP servers (hermes tools) ----
   # coding: Claude Code CLI via `claude mcp serve`, bridged to HTTP by supergateway.
