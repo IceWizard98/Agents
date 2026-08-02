@@ -18,10 +18,10 @@ import (
 
 func main() {
 	baseURL := os.Getenv("PAPERCLIP_API_URL")
-	apiKey := os.Getenv("PAPERCLIP_API_KEY")
+	apiKey := os.Getenv("PAPERCLIP_ADMIN_API_KEY")
 	defaultCompanyID := os.Getenv("PAPERCLIP_COMPANY_ID")
 	if baseURL == "" || apiKey == "" {
-		slog.Error("PAPERCLIP_API_URL / PAPERCLIP_API_KEY missing")
+		slog.Error("PAPERCLIP_API_URL / PAPERCLIP_ADMIN_API_KEY missing")
 		os.Exit(1)
 	}
 	client := newHTTPClient(baseURL, apiKey)

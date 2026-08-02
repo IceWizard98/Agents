@@ -21,7 +21,7 @@ Built on **real open-source products**, not reimplementations:
 The two paths coexist:
 
 ```
-CHAT:      you ──Telegram──▶ hermes ──MCP──▶ coding · github-mcp · jira · mcp-google · mcp-icloud
+CHAT:      you ──Telegram──▶ hermes ──MCP──▶ coding · github-mcp · jira · mcp-google · mcp-icloud · mcp-paperclip
 RECURRING: paperclip ──hermes_gateway──▶ hermes (same worker) + budget/audit
 ```
 
@@ -36,9 +36,10 @@ RECURRING: paperclip ──hermes_gateway──▶ hermes (same worker) + budget
 | `github-mcp`  | MCP: official GitHub API (branch, commit, **PR**) | — | no (:9400) |
 | `jira`        | MCP: Jira client (`mcp-atlassian`) | — | no (:9200) |
 | `mcp-google`  | MCP: Google mail/calendar/drive (`workspace-mcp`) | — | no (:9000) |
-| `mcp-icloud`  | MCP: iCloud SMTP mail sending | — | no (:9001) |
+| `mcp-icloud`  | MCP: iCloud mail — send + full read (list/read/search/mark/move) | — | no (:9001) |
+| `mcp-paperclip` | MCP: Paperclip agent-fleet control (stop/restart all agents, retry blocked issues) | — | no (:9500) |
 
-Custom (Go, tested): `mcp-icloud`. Community/official: Hermes, Paperclip, Claude Code
+Custom (Go, tested): `mcp-icloud`, `mcp-paperclip`. Community/official: Hermes, Paperclip, Claude Code
 CLI (`coding`), GitHub MCP server (`github-mcp`), Google Workspace MCP
 (`workspace-mcp`), Jira (`mcp-atlassian`). `coding`/`github-mcp` are official
 CLIs/images bridged to HTTP with `supergateway` (no custom code).

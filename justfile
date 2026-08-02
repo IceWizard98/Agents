@@ -112,6 +112,13 @@ sync-all-remote project="agents" environment="production": (sync-skills-remote p
 _remote-id pattern project environment:
     #!/usr/bin/env bash
     set -euo pipefail
+    # project/environment get interpolated into a single-quoted string inside the
+    # remote SSH command below — a value containing ' would break out of that
+    # quoting and inject shell commands on the remote host. Restrict to the
+    # charset Coolify actually uses for these labels.
+    for v in "{{project}}" "{{environment}}"; do
+      [[ "$v" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid project/environment '$v' (allowed: [a-zA-Z0-9_-]+)" >&2; exit 1; }
+    done
     id=$(ssh "{{host}}" "docker ps --no-trunc \
         --filter 'label=coolify.projectName={{project}}' \
         --filter 'label=coolify.environmentName={{environment}}'" \

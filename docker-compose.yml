@@ -211,12 +211,16 @@ services:
   # mcp-paperclip: agent-fleet control (stop/restart all agents, retry
   # blocked issues) against the Paperclip REST API. Paperclip's own MCP
   # package only wraps issue CRUD, no agent lifecycle/retry — this fills
-  # that gap. Requires a board-level PAPERCLIP_API_KEY (dashboard > API keys).
+  # that gap. Requires a board-level PAPERCLIP_ADMIN_API_KEY (dashboard > API keys) —
+  # named _ADMIN_ to not collide with the unrelated PAPERCLIP_API_KEY the
+  # hermes_gateway onboarding flow issues (see README "Connect Hermes to Paperclip"):
+  # that one is agent-scoped, this one is board/company-scoped. Same env var name
+  # for both would have silently broken whichever flow ran second.
   mcp-paperclip:
     build: ./mcp-paperclip
     environment:
       - PAPERCLIP_API_URL=http://paperclip:3100
-      - PAPERCLIP_API_KEY=${PAPERCLIP_API_KEY}
+      - PAPERCLIP_ADMIN_API_KEY=${PAPERCLIP_ADMIN_API_KEY}
       - PAPERCLIP_COMPANY_ID=${PAPERCLIP_COMPANY_ID:-}
     networks: [agents_net]
     depends_on:
