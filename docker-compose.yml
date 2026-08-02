@@ -104,6 +104,11 @@ services:
       SERVE_UI: "true"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
       PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      # Defense-in-depth against CVE-2026-41679 (unauthenticated RCE chain via
+      # open signup -> self-approved CLI-auth challenge -> import authz bypass
+      # -> process-adapter spawn(), CVSS 10.0, fixed upstream in 2026.416.0).
+      # Single-user deployment: nobody legitimate needs open signup anyway.
+      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
       # Lets the built-in claude_local adapter run Claude Code on your subscription
