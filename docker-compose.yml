@@ -54,6 +54,8 @@ services:
         condition: service_started
       mcp-icloud:
         condition: service_started
+      mcp-paperclip:
+        condition: service_started
 
   # Hermes dashboard (web UI): separate process from the gateway, same data
   # volume/image. Public bind (0.0.0.0) requires an auth provider — basic auth
@@ -199,4 +201,20 @@ services:
       - ICLOUD_SMTP_APP_PASSWORD=${ICLOUD_SMTP_APP_PASSWORD}
       - ICLOUD_FROM=${ICLOUD_FROM:-}
     networks: [agents_net]
+    restart: unless-stopped
+
+  # mcp-paperclip: agent-fleet control (stop/restart all agents, retry
+  # blocked issues) against the Paperclip REST API. Paperclip's own MCP
+  # package only wraps issue CRUD, no agent lifecycle/retry — this fills
+  # that gap. Requires a board-level PAPERCLIP_API_KEY (dashboard > API keys).
+  mcp-paperclip:
+    build: ./mcp-paperclip
+    environment:
+      - PAPERCLIP_API_URL=http://paperclip:3100
+      - PAPERCLIP_API_KEY=${PAPERCLIP_API_KEY}
+      - PAPERCLIP_COMPANY_ID=${PAPERCLIP_COMPANY_ID:-}
+    networks: [agents_net]
+    depends_on:
+      paperclip:
+        condition: service_started
     restart: unless-stopped
