@@ -66,6 +66,41 @@ func TestHTTPClient_NoHostOverride_UsesBaseURLHost(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_ListCompanies_Happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/companies" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer key123" {
+			t.Fatalf("missing/wrong auth header: %q", r.Header.Get("Authorization"))
+		}
+		json.NewEncoder(w).Encode([]Company{{ID: "c1", Name: "Code blog", Status: "active"}})
+	}))
+	defer srv.Close()
+
+	c := newHTTPClient(srv.URL, "key123")
+	companies, err := c.ListCompanies(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(companies) != 1 || companies[0].ID != "c1" || companies[0].Name != "Code blog" {
+		t.Fatalf("unexpected companies: %+v", companies)
+	}
+}
+
+func TestHTTPClient_ListCompanies_NonOKStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"invalid token"}`))
+	}))
+	defer srv.Close()
+
+	c := newHTTPClient(srv.URL, "bad-key")
+	if _, err := c.ListCompanies(context.Background()); err == nil {
+		t.Fatal("want error for 401 response")
+	}
+}
+
 func TestHTTPClient_ListAgents_EmptyCompanyID(t *testing.T) {
 	c := newHTTPClient("http://unused", "key")
 	if _, err := c.ListAgents(context.Background(), ""); err == nil {

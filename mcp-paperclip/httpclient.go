@@ -98,6 +98,17 @@ func (c *httpAgentIssueClient) do(ctx context.Context, method, path string, body
 	return nil
 }
 
+// ListCompanies lists every company the API key can see. The board key sees
+// all companies it has access to regardless of which one a caller later
+// operates on with company_id.
+func (c *httpAgentIssueClient) ListCompanies(ctx context.Context) ([]Company, error) {
+	var companies []Company
+	if err := c.do(ctx, http.MethodGet, "/api/companies", nil, &companies); err != nil {
+		return nil, err
+	}
+	return companies, nil
+}
+
 func (c *httpAgentIssueClient) ListAgents(ctx context.Context, companyID string) ([]Agent, error) {
 	if strings.TrimSpace(companyID) == "" {
 		return nil, fmt.Errorf("company id is required")

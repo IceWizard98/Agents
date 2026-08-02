@@ -21,6 +21,16 @@ type Agent struct {
 	Status string `json:"status"` // idle, running, paused, terminated, pending_approval, ...
 }
 
+// Company mirrors the fields of a Paperclip company we need. The board API
+// key can see every company it has access to — callers must pick the right
+// id explicitly (id, not issuePrefix — verified live: passing the issue
+// prefix like "COD" 403s with "User does not have access to this company").
+type Company struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"` // active, archived, ...
+}
+
 // Issue mirrors the fields of a Paperclip issue we need.
 type Issue struct {
 	ID              string `json:"id"`

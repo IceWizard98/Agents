@@ -43,6 +43,23 @@ func main() {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "paperclip-control", Version: "0.1.0"}, nil)
 
 	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "list_companies",
+		Description: "List every company this API key can access (id, name, status: active/archived). Use the id — not the issue prefix shown on issues like 'COD-123' — as company_id in every other tool.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in struct{}) (*mcp.CallToolResult, struct {
+		Companies []Company `json:"companies"`
+	}, error) {
+		companies, err := client.ListCompanies(ctx)
+		if err != nil {
+			return errResult(err), struct {
+				Companies []Company `json:"companies"`
+			}{}, nil
+		}
+		return nil, struct {
+			Companies []Company `json:"companies"`
+		}{Companies: companies}, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_agents",
 		Description: "List every agent in the company (id, name, status: idle/running/paused/terminated/pending_approval).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in CompanyRequest) (*mcp.CallToolResult, struct {
