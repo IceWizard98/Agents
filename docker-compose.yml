@@ -229,7 +229,11 @@ services:
       # as an origin — see main.go). Same var paperclip itself uses.
       - PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}
       - PAPERCLIP_ADMIN_API_KEY=${PAPERCLIP_ADMIN_API_KEY}
-      - PAPERCLIP_COMPANY_ID=${PAPERCLIP_COMPANY_ID:-}
+      # PAPERCLIP_COMPANY_ID intentionally not declared here: it's genuinely
+      # optional (list_companies + per-call company_id cover it), but Coolify
+      # lists every var referenced in this block as a field to fill in its UI
+      # regardless of :- defaults — dropping the reference keeps it out of
+      # that list entirely instead of just leaving it blank.
     networks: [agents_net]
     depends_on:
       paperclip:
