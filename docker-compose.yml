@@ -225,6 +225,9 @@ services:
     build: ./mcp-paperclip
     environment:
       - PAPERCLIP_API_URL=http://paperclip:3100
+      # Host header override target (paperclip rejects the internal DNS name
+      # as an origin — see main.go). Same var paperclip itself uses.
+      - PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}
       - PAPERCLIP_ADMIN_API_KEY=${PAPERCLIP_ADMIN_API_KEY}
       - PAPERCLIP_COMPANY_ID=${PAPERCLIP_COMPANY_ID:-}
     networks: [agents_net]

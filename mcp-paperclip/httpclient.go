@@ -15,9 +15,10 @@ import (
 )
 
 type httpAgentIssueClient struct {
-	baseURL string
-	apiKey  string
-	hc      *http.Client
+	baseURL      string
+	apiKey       string
+	hostOverride string // Host header sent instead of the one derived from baseURL, when set
+	hc           *http.Client
 }
 
 func newHTTPClient(baseURL, apiKey string) *httpAgentIssueClient {
@@ -26,6 +27,18 @@ func newHTTPClient(baseURL, apiKey string) *httpAgentIssueClient {
 		apiKey:  apiKey,
 		hc:      &http.Client{Timeout: 20 * time.Second},
 	}
+}
+
+// withHostOverride sets the Host header sent on every request, overriding
+// the one net/http derives from baseURL. Needed when baseURL uses an
+// internal Docker DNS name (e.g. http://paperclip:3100, for agents_net
+// container-to-container traffic) but the target validates the Host header
+// against its own public hostname — verified live: Paperclip rejects
+// "Hostname 'paperclip' is not allowed" otherwise. Same class of fix as
+// paperclip/patch-hosts-entrypoint.sh, applied from the caller's side.
+func (c *httpAgentIssueClient) withHostOverride(host string) *httpAgentIssueClient {
+	c.hostOverride = host
+	return c
 }
 
 // maxErrorBodyEcho caps how much of an upstream error body we quote back to
@@ -54,6 +67,9 @@ func (c *httpAgentIssueClient) do(ctx context.Context, method, path string, body
 	req.Header.Set("Content-Type", "application/json")
 	if c.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	if c.hostOverride != "" {
+		req.Host = c.hostOverride
 	}
 
 	resp, err := c.hc.Do(req)

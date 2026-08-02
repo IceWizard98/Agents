@@ -11,6 +11,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -25,6 +26,19 @@ func main() {
 		os.Exit(1)
 	}
 	client := newHTTPClient(baseURL, apiKey)
+	// PAPERCLIP_API_URL uses the internal Docker DNS name (agents_net) so
+	// traffic never leaves the box, but Paperclip's own trusted-origin check
+	// validates the Host header against its public hostname and rejects the
+	// internal one — verified live: 403 "Hostname 'paperclip' is not
+	// allowed". Override the Host header to the public one while still
+	// dialing the internal address.
+	if pubURL := os.Getenv("PAPERCLIP_PUBLIC_URL"); pubURL != "" {
+		if u, err := url.Parse(pubURL); err == nil && u.Hostname() != "" {
+			client.withHostOverride(u.Hostname())
+		} else {
+			slog.Warn("PAPERCLIP_PUBLIC_URL set but unparseable, Host header override skipped", "value", pubURL, "err", err)
+		}
+	}
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "paperclip-control", Version: "0.1.0"}, nil)
 

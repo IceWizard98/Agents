@@ -31,6 +31,41 @@ func TestHTTPClient_ListAgents_Happy(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_HostOverride_SentOnRequest(t *testing.T) {
+	var gotHost string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		json.NewEncoder(w).Encode([]Agent{})
+	}))
+	defer srv.Close()
+
+	c := newHTTPClient(srv.URL, "key").withHostOverride("paperclip.example.com")
+	if _, err := c.ListAgents(context.Background(), "co1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotHost != "paperclip.example.com" {
+		t.Fatalf("Host header = %q, want paperclip.example.com", gotHost)
+	}
+}
+
+func TestHTTPClient_NoHostOverride_UsesBaseURLHost(t *testing.T) {
+	var gotHost string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		json.NewEncoder(w).Encode([]Agent{})
+	}))
+	defer srv.Close()
+
+	c := newHTTPClient(srv.URL, "key")
+	if _, err := c.ListAgents(context.Background(), "co1"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantHost := strings.TrimPrefix(strings.TrimPrefix(srv.URL, "http://"), "https://")
+	if gotHost != wantHost {
+		t.Fatalf("Host header = %q, want %q (unchanged, no override set)", gotHost, wantHost)
+	}
+}
+
 func TestHTTPClient_ListAgents_EmptyCompanyID(t *testing.T) {
 	c := newHTTPClient("http://unused", "key")
 	if _, err := c.ListAgents(context.Background(), ""); err == nil {
