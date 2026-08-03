@@ -155,10 +155,12 @@ services:
           memory: 3G
 
   # ---- Claude Max proxy: subscription as OpenAI API (hermes brain) ----
-  # Wraps the published claude-max-api-proxy npm package, which spawns the genuine
-  # Claude Code CLI (`claude --print`) on the CLAUDE_CODE_OAUTH_TOKEN — the ALLOWED
-  # path for the subscription token (same binary as `coding`), not header spoofing.
-  # Hermes calls it over OpenAI /v1/chat/completions (see hermes HERMES_BASE_URL).
+  # Our own planner proxy (claude-max-api-proxy/) driving the genuine Claude Code CLI
+  # (`claude --print`) on CLAUDE_CODE_OAUTH_TOKEN — the ALLOWED path (same binary as
+  # `coding`), NOT a header-spoofed HTTP call. Hermes calls it over OpenAI
+  # /v1/chat/completions; its tools are framed as "actions" the model PROPOSES and
+  # Hermes executes (real tool-calling). Tool-bearing turns auto-upgrade haiku->sonnet
+  # (haiku can't follow the planner protocol); plain chat stays on the requested model.
   claude-max-api-proxy:
     build: ./claude-max-api-proxy
     environment:

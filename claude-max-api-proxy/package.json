@@ -2,8 +2,9 @@
   "name": "claude-max-api-proxy-container",
   "private": true,
   "type": "module",
-  "description": "Container wrapper around the published claude-max-api-proxy npm package.",
-  "dependencies": {
-    "claude-max-api-proxy": "1.0.0"
+  "description": "OpenAI-compatible planner proxy over the Claude Code CLI (no runtime deps).",
+  "scripts": {
+    "test": "node test.mjs",
+    "start": "node server.mjs"
   }
 }
