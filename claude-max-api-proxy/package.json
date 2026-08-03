@@ -1,0 +1,9 @@
+{
+  "name": "claude-max-api-proxy-container",
+  "private": true,
+  "type": "module",
+  "description": "Container wrapper around the published claude-max-api-proxy npm package.",
+  "dependencies": {
+    "claude-max-api-proxy": "1.0.0"
+  }
+}

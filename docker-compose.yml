@@ -17,6 +17,7 @@ volumes:
   coding_home: {}
   coding_repos: {}
   google_tokens: {}
+  claude_proxy_home: {}
 
 services:
   # ---- Hermes: AI worker + chat gateway (Telegram) + MCP client ----
@@ -24,9 +25,18 @@ services:
     build: ./hermes   # official image + cont-init (seed config, apply HERMES_MODEL)
     command: ["gateway", "run"]
     environment:
-      # Model via OpenRouter (subscription OAuth token is banned for third-party apps).
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - HERMES_MODEL=${HERMES_MODEL:-anthropic/claude-opus-4.8}
+      # Brain via claude-max-api-proxy: Hermes speaks OpenAI to the proxy, which runs
+      # the genuine Claude Code CLI on the Max subscription. cont-init registers a
+      # native "custom provider" (providers.claude-max) from these three vars:
+      #   HERMES_MODEL   -> model.default (claude-haiku-4 => CLI `haiku` alias;
+      #                     also claude-sonnet-4 / claude-opus-4)
+      #   HERMES_BASE_URL-> providers.claude-max.api
+      #   OPENAI_API_KEY -> key for that provider (any value; proxy auth off by default)
+      - HERMES_MODEL=${HERMES_MODEL:-claude-haiku-4}
+      - HERMES_BASE_URL=${HERMES_BASE_URL:-http://claude-max-api-proxy:3456/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-local-proxy}
+      # OpenRouter kept for the config fallback_model only (free rollover on 429).
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # API server: used by paperclip to call hermes (hermes_gateway adapter).
       - API_SERVER_ENABLED=true
       - API_SERVER_KEY=${API_SERVER_KEY}
@@ -44,6 +54,8 @@ services:
     # `gateway run` here does not serve it.
     restart: unless-stopped
     depends_on:
+      claude-max-api-proxy:
+        condition: service_healthy
       coding:
         condition: service_healthy
       github-mcp:
@@ -141,6 +153,25 @@ services:
         limits:
           cpus: "2"
           memory: 3G
+
+  # ---- Claude Max proxy: subscription as OpenAI API (hermes brain) ----
+  # Wraps the published claude-max-api-proxy npm package, which spawns the genuine
+  # Claude Code CLI (`claude --print`) on the CLAUDE_CODE_OAUTH_TOKEN — the ALLOWED
+  # path for the subscription token (same binary as `coding`), not header spoofing.
+  # Hermes calls it over OpenAI /v1/chat/completions (see hermes HERMES_BASE_URL).
+  claude-max-api-proxy:
+    build: ./claude-max-api-proxy
+    environment:
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      - PORT=3456
+      # No auth knob: the published npm package (1.0.0) has none. The proxy is
+      # unauthenticated but reachable only on the internal agents_net (no `ports:`
+      # mapping), so only stack containers can call it. Single-user deployment.
+    volumes:
+      # Persist the CLI's ~/.claude (config/cache) so it doesn't re-init each boot.
+      - claude_proxy_home:/root/.claude
+    networks: [agents_net]
+    restart: unless-stopped
 
   # ---- MCP servers (hermes tools) ----
   # coding: Claude Code CLI via `claude mcp serve`, bridged to HTTP by supergateway.

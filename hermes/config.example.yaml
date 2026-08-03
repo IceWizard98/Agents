@@ -3,19 +3,29 @@
 # Hermes rewrites config.yaml at runtime (migrate, /sethome, ...), so the live
 # file is not versioned — only this template is. Secrets stay in .env, not here.
 
-# Model: Claude via OpenRouter (OPENROUTER_API_KEY in env). The Claude Code
-# subscription OAuth token is NOT usable here — Anthropic bans third-party OAuth use
-# (only the genuine Claude Code binary in the `coding` container still uses it).
+# Model: Claude Max subscription via the claude-max-api-proxy service. Hermes talks
+# OpenAI /v1/chat/completions to a "custom provider" (providers.claude-max below); the
+# proxy runs the genuine Claude Code CLI on CLAUDE_CODE_OAUTH_TOKEN. This is the ALLOWED
+# path (real CLI binary) — NOT feeding the OAuth token to a raw third-party HTTP client.
 model:
-  provider: openrouter
-  # Primary model. Change it with `just set-model` (reads HERMES_MODEL from .env)
-  # — Hermes does NOT expand ${VARS} in this field at call time.
-  # Free models are rate-limited (429) — the fallback below is a SECOND free model
-  # so a saturated primary rolls over instead of failing. For heavier use switch to
-  # a cheap paid one (anthropic/claude-... or google/gemini-2.5-flash) via `just set-model`.
-  default: google/gemma-4-26b-a4b-it:free
+  provider: claude-max
+  # Maps to the CLI `haiku` alias; also claude-sonnet-4 / claude-opus-4 (opus => Opus 5).
+  # cont-init overwrites this from HERMES_MODEL on boot (Coolify: change env + redeploy).
+  default: claude-haiku-4
 
-# Failover on 429/503/529/connection error. Kept free too (all-free stack).
+# Custom OpenAI-compatible provider = the in-stack proxy. cont-init overwrites `api`
+# from HERMES_BASE_URL on boot. Key comes from OPENAI_API_KEY (any value; the proxy has
+# no auth and is only reachable on the internal agents_net).
+providers:
+  claude-max:
+    api: http://claude-max-api-proxy:3456/v1
+    key_env: OPENAI_API_KEY
+    default_model: claude-haiku-4
+    # Lets `/model` list all three (opus/sonnet/haiku) in-chat without a network probe.
+    models: [claude-opus-4, claude-sonnet-4, claude-haiku-4]
+
+# Failover on 429/503/529/connection error. Optional free OpenRouter model — only used
+# if OPENROUTER_API_KEY is set; harmless to leave otherwise.
 fallback_model:
   provider: openrouter
   model: poolside/laguna-s-2.1:free

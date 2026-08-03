@@ -17,3 +17,15 @@ if [ -n "${HERMES_MODEL:-}" ]; then
   hermes config set model.default "$HERMES_MODEL" || \
     echo "[cont-init] warning: could not apply HERMES_MODEL=$HERMES_MODEL"
 fi
+
+# Brain via the claude-max-api-proxy. Uses Hermes' native custom-provider mechanism
+# (providers.<slug> = an OpenAI-compatible endpoint + key env), NOT model.base_url:
+# a bare model.base_url is ignored while model.provider names a built-in provider like
+# openrouter. When HERMES_BASE_URL is set we register the `claude-max` provider and
+# point model.provider at it; unset it (and pick another provider) to revert.
+if [ -n "${HERMES_BASE_URL:-}" ]; then
+  hermes config set providers.claude-max.api "$HERMES_BASE_URL" >/dev/null 2>&1 || \
+    echo "[cont-init] warning: could not set providers.claude-max.api=$HERMES_BASE_URL"
+  hermes config set providers.claude-max.key_env OPENAI_API_KEY >/dev/null 2>&1 || true
+  hermes config set model.provider claude-max >/dev/null 2>&1 || true
+fi
