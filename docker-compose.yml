@@ -227,7 +227,7 @@ services:
       # OAuth redirect base (…/oauth2callback must be reachable by the browser
       # doing consent). Auto-picked up from Coolify's magic SERVICE_URL_MCP_GOOGLE
       # (injected automatically once this service has a domain assigned in the
-      # Coolify UI — verified live: SERVICE_URL_MCP_GOOGLE=https://mcp-google.example.com).
+      # Coolify UI — e.g. SERVICE_URL_MCP_GOOGLE=https://mcp-google.example.com).
       # WORKSPACE_MCP_BASE_URI still wins if set explicitly (local dev, non-Coolify prod).
       - WORKSPACE_MCP_BASE_URI=${WORKSPACE_MCP_BASE_URI:-${SERVICE_URL_MCP_GOOGLE:-http://localhost}}
     volumes:
