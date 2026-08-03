@@ -16,7 +16,29 @@ import {
 
 const PORT = Number(process.env.PORT || 3456);
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS || 300000);
+const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY || 4);
 const MODELS = ["opus", "sonnet", "haiku"];
+
+// The planner must PROPOSE, never execute — and the OAuth token lives in this process'
+// env, which the Bash tool could read and exfiltrate. Hard-disable the CLI's built-in
+// executing tools (the planner system prompt alone is not a trust boundary).
+const DISALLOWED_TOOLS = [
+  "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch",
+  "NotebookEdit", "MultiEdit", "Task", "TodoWrite", "LS",
+];
+
+// Cap concurrent `claude` subprocesses (each is heavy) so a burst can't exhaust the box.
+let active = 0;
+const waiters = [];
+function acquire() {
+  if (active < MAX_CONCURRENCY) { active++; return Promise.resolve(); }
+  return new Promise((r) => waiters.push(r)).then(() => { active++; });
+}
+function release() {
+  active--;
+  const next = waiters.shift();
+  if (next) next();
+}
 
 // Map any incoming OpenAI model id to a bare CLI tier alias.
 function toAlias(model) {
@@ -34,17 +56,19 @@ function runClaude(prompt, model) {
       "--print",
       "--exclude-dynamic-system-prompt-sections",
       "--system-prompt", PLANNER_SYSTEM,
+      "--disallowedTools", ...DISALLOWED_TOOLS,
       "--model", model,
       "--no-session-persistence",
-      prompt,
     ];
-    // ponytail: built-in tool execution isn't hard-disabled (the --allowedTools flag is
-    // variadic and eats the prompt); the planner system prompt keeps the model proposing
-    // rather than executing. Enumerate --disallowedTools here if a model ever executes.
+    // Prompt goes on STDIN, not argv: a real agent conversation (system + skills + MCP
+    // tool schemas + history) easily exceeds Linux MAX_ARG_STRLEN (128 KB per argv
+    // element), which would fail spawn with E2BIG. --print reads the prompt from stdin.
     const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"], env: process.env });
     let out = "", err = "";
     const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new Error(`claude timed out after ${CLI_TIMEOUT_MS}ms`)); }, CLI_TIMEOUT_MS);
-    child.stdin.end(); // no stdin: prompt is an arg
+    child.stdin.on("error", () => {}); // ignore EPIPE if the CLI exits before reading all input
+    child.stdin.write(prompt);
+    child.stdin.end();
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
     child.on("error", (e) => { clearTimeout(timer); reject(e); });
@@ -82,14 +106,22 @@ async function handleChat(req, res, body) {
   const model = resolveModel(toAlias(body.model), hasTools);
   const prompt = buildPlannerPrompt(body.messages || [], body.tools);
   let text;
+  await acquire();
   try {
     text = await runClaude(prompt, model);
   } catch (e) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: { message: String(e.message || e), type: "cli_error" } }));
     return;
+  } finally {
+    release();
   }
   const parsed = parseModelOutput(text);
+  // A tool turn that came back as prose (not a protocol block) means Hermes gets a
+  // guessed answer instead of a tool call — surface it instead of failing silently.
+  if (hasTools && !parsed.matched) {
+    console.warn(`[claude-max-api-proxy] tool turn produced no action block (model=${model}); returning prose as final`);
+  }
   const full = toOpenAIResponse(parsed, model, randomUUID());
   if (body.stream) streamResponse(res, full, model);
   else { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(full)); }

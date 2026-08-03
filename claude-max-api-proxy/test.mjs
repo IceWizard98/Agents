@@ -44,12 +44,14 @@ const tests = {
     assert.equal(r.type, "action");
     assert.equal(r.name, "get_weather");
     assert.deepEqual(r.arguments, { city: "Rome" });
+    assert.equal(r.matched, true);
   },
 
   parse_final_block() {
     const r = parseModelOutput('```json\n{"final":"31C sunny"}\n```');
     assert.equal(r.type, "final");
     assert.equal(r.content, "31C sunny");
+    assert.equal(r.matched, true);
   },
 
   parse_bare_json_action() {
@@ -58,10 +60,22 @@ const tests = {
     assert.equal(r.name, "x");
   },
 
-  parse_plain_text_is_final() {
+  parse_plain_text_is_final_unmatched() {
     const r = parseModelOutput("Just a plain answer.");
     assert.equal(r.type, "final");
     assert.equal(r.content, "Just a plain answer.");
+    assert.equal(r.matched, false); // caller uses this to detect a missed tool turn
+  },
+
+  builds_multiple_assistant_tool_calls() {
+    const p = buildPlannerPrompt([
+      { role: "assistant", content: null, tool_calls: [
+        { id: "a", type: "function", function: { name: "t1", arguments: "{}" } },
+        { id: "b", type: "function", function: { name: "t2", arguments: '{"x":1}' } },
+      ] },
+    ], []);
+    assert.ok(p.includes('{"action":{"name":"t1","arguments":{}}}'));
+    assert.ok(p.includes('{"action":{"name":"t2","arguments":{"x":1}}}'));
   },
 
   response_action_maps_to_tool_calls() {

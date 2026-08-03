@@ -76,10 +76,13 @@ export function buildPlannerPrompt(messages, tools) {
       lines.push(`USER: ${contentToText(m.content)}`);
     } else if (m.role === "assistant") {
       if (m.tool_calls && m.tool_calls.length) {
-        const tc = m.tool_calls[0];
-        let args = {};
-        try { args = JSON.parse(tc.function?.arguments || "{}"); } catch { args = {}; }
-        lines.push(`ASSISTANT: ${JSON.stringify({ action: { name: tc.function?.name, arguments: args } })}`);
+        // One ASSISTANT action line per tool_call (the proxy emits single actions,
+        // but honor a history that carries several so none are silently dropped).
+        for (const tc of m.tool_calls) {
+          let args = {};
+          try { args = JSON.parse(tc.function?.arguments || "{}"); } catch { args = {}; }
+          lines.push(`ASSISTANT: ${JSON.stringify({ action: { name: tc.function?.name, arguments: args } })}`);
+        }
       } else {
         lines.push(`ASSISTANT: ${contentToText(m.content)}`);
       }
@@ -105,15 +108,16 @@ export function parseModelOutput(text) {
     try {
       const obj = JSON.parse(jsonStr);
       if (obj && obj.action && obj.action.name) {
-        return { type: "action", name: obj.action.name, arguments: obj.action.arguments || {} };
+        return { type: "action", name: obj.action.name, arguments: obj.action.arguments || {}, matched: true };
       }
       if (obj && typeof obj.final === "string") {
-        return { type: "final", content: obj.final };
+        return { type: "final", content: obj.final, matched: true };
       }
     } catch { /* fall through to plain text */ }
   }
   // No recognizable protocol block -> treat the whole reply as the final answer.
-  return { type: "final", content: raw };
+  // matched:false lets the caller notice when a tool turn failed to produce an action.
+  return { type: "final", content: raw, matched: false };
 }
 
 export function toOpenAIResponse(parsed, model, id) {
