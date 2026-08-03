@@ -28,11 +28,11 @@ services:
       # Brain via claude-max-api-proxy: Hermes speaks OpenAI to the proxy, which runs
       # the genuine Claude Code CLI on the Max subscription. cont-init registers a
       # native "custom provider" (providers.claude-max) from these three vars:
-      #   HERMES_MODEL   -> model.default (claude-haiku-4 => CLI `haiku` alias;
-      #                     also claude-sonnet-4 / claude-opus-4)
+      #   HERMES_MODEL   -> model.default (bare tier alias: haiku => Haiku 4.5,
+      #                     sonnet => Sonnet 5, opus => Opus 5)
       #   HERMES_BASE_URL-> providers.claude-max.api
       #   OPENAI_API_KEY -> key for that provider (any value; proxy auth off by default)
-      - HERMES_MODEL=${HERMES_MODEL:-claude-haiku-4}
+      - HERMES_MODEL=${HERMES_MODEL:-haiku}
       - HERMES_BASE_URL=${HERMES_BASE_URL:-http://claude-max-api-proxy:3456/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-local-proxy}
       # OpenRouter kept for the config fallback_model only (free rollover on 429).

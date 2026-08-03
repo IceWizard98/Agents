@@ -9,9 +9,11 @@
 # path (real CLI binary) — NOT feeding the OAuth token to a raw third-party HTTP client.
 model:
   provider: claude-max
-  # Maps to the CLI `haiku` alias; also claude-sonnet-4 / claude-opus-4 (opus => Opus 5).
+  # Bare CLI tier aliases — each resolves to the LATEST model of that family
+  # (opus => Opus 5, sonnet => Sonnet 5, haiku => Haiku 4.5). Using the aliases (not
+  # the proxy's cosmetic claude-*-4 ids) keeps /model from showing a misleading "4".
   # cont-init overwrites this from HERMES_MODEL on boot (Coolify: change env + redeploy).
-  default: claude-haiku-4
+  default: haiku
 
 # Custom OpenAI-compatible provider = the in-stack proxy. cont-init overwrites `api`
 # from HERMES_BASE_URL on boot. Key comes from OPENAI_API_KEY (any value; the proxy has
@@ -20,9 +22,9 @@ providers:
   claude-max:
     api: http://claude-max-api-proxy:3456/v1
     key_env: OPENAI_API_KEY
-    default_model: claude-haiku-4
-    # Lets `/model` list all three (opus/sonnet/haiku) in-chat without a network probe.
-    models: [claude-opus-4, claude-sonnet-4, claude-haiku-4]
+    default_model: haiku
+    # Lets `/model` list all three tiers in-chat without a network probe.
+    models: [opus, sonnet, haiku]
 
 # Failover on 429/503/529/connection error. Optional free OpenRouter model — only used
 # if OPENROUTER_API_KEY is set; harmless to leave otherwise.
