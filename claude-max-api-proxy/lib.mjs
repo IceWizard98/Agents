@@ -34,10 +34,44 @@ function contentToText(content) {
     .join("");
 }
 
+// Prose-only JSON Schema keywords: pure documentation the planner doesn't need to emit
+// valid arguments. On verbose MCP catalogs (Google Workspace) these are most of the bytes,
+// and the whole catalog is resent every stateless turn — so stripping them cuts the token
+// cost of every message. type/enum/required/format/properties stay: the model needs them.
+const SCHEMA_PROSE_KEYS = new Set(["description", "examples", "example", "default", "title", "$comment", "$schema"]);
+// Sub-schema containers: recurse into these so nested prose is stripped too. `properties`,
+// `$defs`, `definitions`, `patternProperties` are name->schema MAPS — their keys are user
+// data (a tool arg may literally be named "description"), so we keep keys and slim values.
+const SCHEMA_MAPS = new Set(["properties", "$defs", "definitions", "patternProperties"]);
+const SCHEMA_LISTS = new Set(["anyOf", "allOf", "oneOf", "prefixItems"]);
+const SCHEMA_SINGLE = new Set(["items", "additionalProperties", "not", "contains"]);
+
+// Strip documentation prose from a JSON Schema, keeping the structure needed to build args.
+export function slimSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(slimSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out = {};
+  for (const [k, v] of Object.entries(schema)) {
+    if (SCHEMA_PROSE_KEYS.has(k)) continue;
+    if (SCHEMA_MAPS.has(k) && v && typeof v === "object") {
+      const m = {};
+      for (const [name, sub] of Object.entries(v)) m[name] = slimSchema(sub);
+      out[k] = m;
+    } else if (SCHEMA_LISTS.has(k)) {
+      out[k] = Array.isArray(v) ? v.map(slimSchema) : slimSchema(v);
+    } else if (SCHEMA_SINGLE.has(k)) {
+      out[k] = slimSchema(v); // may be a bool (additionalProperties:false) — slimSchema passes it through
+    } else {
+      out[k] = v; // type, enum, required, format, minimum, ... kept verbatim
+    }
+  }
+  return out;
+}
+
 function toolsToActions(tools) {
   return (tools || []).map((t) => {
     const fn = t.function || t;
-    return { name: fn.name, description: fn.description || "", arguments_schema: fn.parameters || {} };
+    return { name: fn.name, description: fn.description || "", arguments_schema: slimSchema(fn.parameters || {}) };
   });
 }
 

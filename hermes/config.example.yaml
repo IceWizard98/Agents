@@ -46,17 +46,9 @@ skills:
     - /opt/data/plugin-skills
 
 # External tools over MCP (streamable HTTP on the agents_net network).
-# coding's `claude mcp serve` is slow to warm up on the first call — give it a
-# generous timeout so the first tool call doesn't fail.
+# Solo i server usati in chat: ogni server elencato qui rispedisce il suo schema
+# tool a OGNI turno (stateless), quindi meno server = meno token per messaggio.
 mcp_servers:
-  coding:
-    url: http://coding:9100/mcp
-    timeout: 180
-  github:
-    url: http://github-mcp:9400/mcp
-    timeout: 60
-  jira:
-    url: http://jira:9200/mcp
   google:
     url: http://mcp-google:9000/mcp
   icloud:

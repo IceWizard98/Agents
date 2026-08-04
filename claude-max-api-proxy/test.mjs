@@ -5,6 +5,7 @@ import {
   parseModelOutput,
   toOpenAIResponse,
   resolveModel,
+  slimSchema,
 } from "./lib.mjs";
 
 const tests = {
@@ -91,6 +92,66 @@ const tests = {
     const out = toOpenAIResponse({ type: "final", content: "hi" }, "sonnet", "abc");
     assert.equal(out.choices[0].finish_reason, "stop");
     assert.equal(out.choices[0].message.content, "hi");
+  },
+
+  slim_strips_nested_prose_keeps_structure() {
+    const s = slimSchema({
+      type: "object",
+      description: "outer prose",
+      properties: {
+        city: { type: "string", description: "the city", examples: ["Rome"] },
+        unit: { type: "string", enum: ["c", "f"], default: "c" },
+      },
+      required: ["city"],
+    });
+    // prose keywords gone
+    assert.equal(s.description, undefined);
+    assert.equal(s.properties.city.description, undefined);
+    assert.equal(s.properties.city.examples, undefined);
+    assert.equal(s.properties.unit.default, undefined);
+    // structure the model needs kept
+    assert.equal(s.properties.city.type, "string");
+    assert.deepEqual(s.properties.unit.enum, ["c", "f"]);
+    assert.deepEqual(s.required, ["city"]);
+  },
+
+  slim_keeps_property_literally_named_description() {
+    // a tool arg named "description" must survive — it's a property key, not a keyword
+    const s = slimSchema({
+      type: "object",
+      properties: { description: { type: "string", description: "the note body" } },
+      required: ["description"],
+    });
+    assert.ok(s.properties.description, "property named description must be kept");
+    assert.equal(s.properties.description.type, "string");
+    assert.equal(s.properties.description.description, undefined); // its own prose stripped
+    assert.deepEqual(s.required, ["description"]);
+  },
+
+  slim_recurses_items_and_combinators() {
+    const s = slimSchema({
+      type: "array",
+      items: { type: "object", description: "d", properties: { x: { type: "number", title: "X" } } },
+      anyOf: [{ type: "string", description: "gone" }],
+    });
+    assert.equal(s.items.description, undefined);
+    assert.equal(s.items.properties.x.title, undefined);
+    assert.equal(s.items.properties.x.type, "number");
+    assert.equal(s.anyOf[0].description, undefined);
+    assert.equal(s.anyOf[0].type, "string");
+  },
+
+  build_prompt_slims_tool_schemas() {
+    const p = buildPlannerPrompt(
+      [{ role: "user", content: "hi" }],
+      [{ type: "function", function: {
+        name: "send_email", description: "send an email",
+        parameters: { type: "object", properties: { body: { type: "string", description: "VERBOSE_BODY_PROSE" } } },
+      } }]
+    );
+    assert.ok(p.includes('"send_email"'));
+    assert.ok(p.includes("send an email")); // top-level tool description kept (planner picks by it)
+    assert.ok(!p.includes("VERBOSE_BODY_PROSE")); // nested schema prose stripped
   },
 
   resolve_model_upgrades_haiku_when_tools() {
