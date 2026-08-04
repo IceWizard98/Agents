@@ -6,9 +6,13 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { writeFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   PLANNER_SYSTEM,
-  buildPlannerPrompt,
+  buildSystemPrefix,
+  buildConversation,
   parseModelOutput,
   toOpenAIResponse,
   resolveModel,
@@ -50,30 +54,36 @@ function toAlias(model) {
 }
 
 // Run `claude --print` once, return its stdout text. Rejects on non-zero exit.
-function runClaude(prompt, model) {
+// The STABLE prefix (planner protocol + action catalog + agent instructions) goes in the
+// system prompt via --system-prompt-file; the VOLATILE conversation goes on stdin. This
+// split is what makes Claude Code cache the catalog (1h TTL, measured) so repeated turns
+// re-read it at ~10% cost instead of re-sending it. A file (not --system-prompt argv)
+// avoids MAX_ARG_STRLEN / E2BIG on large catalogs.
+function runClaude(systemPrompt, conversation, model) {
   return new Promise((resolve, reject) => {
+    const sysFile = join(tmpdir(), `planner-sys-${randomUUID()}.txt`);
+    try { writeFileSync(sysFile, systemPrompt); } catch (e) { return reject(e); }
+    const cleanup = () => { try { unlinkSync(sysFile); } catch { /* already gone */ } };
     const args = [
       "--print",
       "--exclude-dynamic-system-prompt-sections",
-      "--system-prompt", PLANNER_SYSTEM,
+      "--system-prompt-file", sysFile,
       "--disallowedTools", ...DISALLOWED_TOOLS,
       "--model", model,
       "--no-session-persistence",
     ];
-    // Prompt goes on STDIN, not argv: a real agent conversation (system + skills + MCP
-    // tool schemas + history) easily exceeds Linux MAX_ARG_STRLEN (128 KB per argv
-    // element), which would fail spawn with E2BIG. --print reads the prompt from stdin.
     const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"], env: process.env });
     let out = "", err = "";
-    const timer = setTimeout(() => { child.kill("SIGTERM"); reject(new Error(`claude timed out after ${CLI_TIMEOUT_MS}ms`)); }, CLI_TIMEOUT_MS);
+    const timer = setTimeout(() => { child.kill("SIGTERM"); cleanup(); reject(new Error(`claude timed out after ${CLI_TIMEOUT_MS}ms`)); }, CLI_TIMEOUT_MS);
     child.stdin.on("error", () => {}); // ignore EPIPE if the CLI exits before reading all input
-    child.stdin.write(prompt);
+    child.stdin.write(conversation);
     child.stdin.end();
     child.stdout.on("data", (d) => { out += d; });
     child.stderr.on("data", (d) => { err += d; });
-    child.on("error", (e) => { clearTimeout(timer); reject(e); });
+    child.on("error", (e) => { clearTimeout(timer); cleanup(); reject(e); });
     child.on("close", (code) => {
       clearTimeout(timer);
+      cleanup();
       if (code === 0) resolve(out.trim());
       else reject(new Error(`claude exited ${code}: ${err.slice(0, 500)}`));
     });
@@ -104,11 +114,14 @@ function streamResponse(res, full, model) {
 async function handleChat(req, res, body) {
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
   const model = resolveModel(toAlias(body.model), hasTools);
-  const prompt = buildPlannerPrompt(body.messages || [], body.tools);
+  const messages = body.messages || [];
+  const prefix = buildSystemPrefix(messages, body.tools);
+  const systemPrompt = prefix ? `${PLANNER_SYSTEM}\n\n${prefix}` : PLANNER_SYSTEM;
+  const conversation = buildConversation(messages);
   let text;
   await acquire();
   try {
-    text = await runClaude(prompt, model);
+    text = await runClaude(systemPrompt, conversation, model);
   } catch (e) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: { message: String(e.message || e), type: "cli_error" } }));

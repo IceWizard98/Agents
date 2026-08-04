@@ -2,6 +2,8 @@
 import assert from "node:assert";
 import {
   buildPlannerPrompt,
+  buildSystemPrefix,
+  buildConversation,
   parseModelOutput,
   toOpenAIResponse,
   resolveModel,
@@ -92,6 +94,33 @@ const tests = {
     const out = toOpenAIResponse({ type: "final", content: "hi" }, "sonnet", "abc");
     assert.equal(out.choices[0].finish_reason, "stop");
     assert.equal(out.choices[0].message.content, "hi");
+  },
+
+  system_prefix_holds_stable_half_only() {
+    const msgs = [{ role: "system", content: "be terse" }, { role: "user", content: "ciao" }];
+    const tools = [{ type: "function", function: { name: "get_weather", description: "w", parameters: { type: "object" } } }];
+    const prefix = buildSystemPrefix(msgs, tools);
+    assert.ok(prefix.includes("ACTIONS the host can perform:"));
+    assert.ok(prefix.includes('"get_weather"'));
+    assert.ok(prefix.includes("AGENT INSTRUCTIONS:"));
+    assert.ok(prefix.includes("be terse"));
+    assert.ok(!prefix.includes("Conversation:")); // conversation must NOT be in the cached prefix
+    assert.ok(!prefix.includes("ciao"));
+  },
+
+  conversation_holds_volatile_half_only() {
+    const conv = buildConversation([{ role: "system", content: "be terse" }, { role: "user", content: "ciao" }]);
+    assert.ok(conv.startsWith("Conversation:"));
+    assert.ok(conv.includes("USER: ciao"));
+    assert.ok(!conv.includes("ACTIONS")); // catalog must NOT ride on the volatile stdin
+    assert.ok(!conv.includes("be terse"));
+  },
+
+  split_recomposes_to_planner_prompt() {
+    const msgs = [{ role: "system", content: "sys" }, { role: "user", content: "hi" }];
+    const tools = [{ type: "function", function: { name: "t", description: "d", parameters: {} } }];
+    const whole = buildPlannerPrompt(msgs, tools);
+    assert.equal(whole, `${buildSystemPrefix(msgs, tools)}\n\n${buildConversation(msgs)}`);
   },
 
   slim_strips_nested_prose_keeps_structure() {

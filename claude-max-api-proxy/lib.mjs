@@ -75,9 +75,13 @@ function toolsToActions(tools) {
   });
 }
 
-// Build the single prompt string handed to `claude --print`. The planner protocol
-// lives in PLANNER_SYSTEM (passed via --system-prompt); this is the conversation body.
-export function buildPlannerPrompt(messages, tools) {
+// The STABLE half of the prompt: action catalog + agent instructions. It repeats
+// byte-for-byte every turn, so the caller puts it in the CLI system prompt (via
+// --system-prompt-file) where Claude Code marks it cacheable — measured: cached with a
+// 1h TTL, so repeated turns read it back at ~10% cost instead of re-sending the whole
+// tool catalog. Keep this independent of the conversation so a new user message can't
+// bust the cached prefix.
+export function buildSystemPrefix(messages, tools) {
   const lines = [];
   const actions = toolsToActions(tools);
   if (actions.length) {
@@ -85,13 +89,6 @@ export function buildPlannerPrompt(messages, tools) {
     lines.push(JSON.stringify(actions));
     lines.push("");
   }
-
-  // Map tool_call_id -> action name so a later tool result can name its action.
-  const idToName = {};
-  for (const m of messages) {
-    for (const tc of m.tool_calls || []) idToName[tc.id] = tc.function?.name || "action";
-  }
-
   const agentInstructions = messages
     .filter((m) => m.role === "system")
     .map((m) => contentToText(m.content))
@@ -100,10 +97,18 @@ export function buildPlannerPrompt(messages, tools) {
   if (agentInstructions) {
     lines.push("AGENT INSTRUCTIONS:");
     lines.push(agentInstructions);
-    lines.push("");
   }
+  return lines.join("\n").trim();
+}
 
-  lines.push("Conversation:");
+// The VOLATILE half: the conversation, which grows every turn. Goes on stdin.
+export function buildConversation(messages) {
+  // Map tool_call_id -> action name so a later tool result can name its action.
+  const idToName = {};
+  for (const m of messages) {
+    for (const tc of m.tool_calls || []) idToName[tc.id] = tc.function?.name || "action";
+  }
+  const lines = ["Conversation:"];
   for (const m of messages) {
     if (m.role === "system") continue;
     if (m.role === "user") {
@@ -126,6 +131,14 @@ export function buildPlannerPrompt(messages, tools) {
     }
   }
   return lines.join("\n");
+}
+
+// Whole prompt as one string (prefix + conversation). Kept for callers/tests that want
+// the un-split form; the server splits it to exploit prompt caching.
+export function buildPlannerPrompt(messages, tools) {
+  const prefix = buildSystemPrefix(messages, tools);
+  const conv = buildConversation(messages);
+  return prefix ? `${prefix}\n\n${conv}` : conv;
 }
 
 // Extract the JSON object from the model's reply (fenced block or bare) and classify.
