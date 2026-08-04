@@ -5,6 +5,15 @@ set -eu
 CFG=/opt/data/config.yaml
 mkdir -p /opt/data
 
+# Il seeder delle bundled-skill gira come utente non-root `hermes`: deve poter
+# creare le sottocartelle-categoria sotto il volume persistente. Una
+# /opt/data/skills lasciata root-owned da un'immagine vecchia blocca il seeding
+# di TUTTE le bundled skill ("Permission denied"). chown non-ricorsivo: non tocca
+# le skill utente già presenti, dà solo il permesso di mkdir sulla dir padre.
+if [ -d /opt/data/skills ]; then
+  chown hermes:hermes /opt/data/skills 2>/dev/null || true
+fi
+
 # Seed the versioned template into the data volume on first boot only
 # (afterwards Hermes owns/rewrites config.yaml at runtime).
 if [ ! -f "$CFG" ]; then
