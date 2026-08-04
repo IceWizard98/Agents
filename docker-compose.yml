@@ -72,88 +72,88 @@ services:
   # Hermes dashboard (web UI): separate process from the gateway, same data
   # volume/image. Public bind (0.0.0.0) requires an auth provider — basic auth
   # via HERMES_DASHBOARD_BASIC_AUTH_*.
-  hermes-dashboard:
-    build: ./hermes
-    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--skip-build", "--no-open"]
-    environment:
-      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
-      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must be set}
-      - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_BASIC_AUTH_SECRET:?HERMES_DASHBOARD_BASIC_AUTH_SECRET must be set}
-      - HERMES_DASHBOARD_PUBLIC_URL=${HERMES_DASHBOARD_PUBLIC_URL:-http://localhost:9119}
-    volumes:
-      - hermes_data:/opt/data
-    networks: [agents_net]
-    ports:
-      - "9119:9119"
-    restart: unless-stopped
-    depends_on:
-      hermes:
-        condition: service_started
+ # hermes-dashboard:
+ #   build: ./hermes
+ #   command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--skip-build", "--no-open"]
+ #   environment:
+ #     - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
+ #     - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must be set}
+ #     - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_BASIC_AUTH_SECRET:?HERMES_DASHBOARD_BASIC_AUTH_SECRET must be set}
+ #     - HERMES_DASHBOARD_PUBLIC_URL=${HERMES_DASHBOARD_PUBLIC_URL:-http://localhost:9119}
+ #   volumes:
+ #     - hermes_data:/opt/data
+ #   networks: [agents_net]
+ #   ports:
+ #     - "9119:9119"
+ #   restart: unless-stopped
+ #   depends_on:
+ #     hermes:
+ #       condition: service_started
 
   # ---- Paperclip: orchestration, governance, recurring tasks ----
-  paperclip-db:
-    image: postgres:17-alpine
-    environment:
-      POSTGRES_USER: paperclip
-      POSTGRES_PASSWORD: paperclip
-      POSTGRES_DB: paperclip
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
-      interval: 2s
-      timeout: 5s
-      retries: 30
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    networks: [agents_net]
-    restart: unless-stopped
-
-  paperclip:
-    # Official published image. Tag overridable to test versions (PAPERCLIP_IMAGE).
-    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
-    environment:
-      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
-      PORT: "3100"
-      SERVE_UI: "true"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-      # Defense-in-depth against CVE-2026-41679 (unauthenticated RCE chain via
-      # open signup -> self-approved CLI-auth challenge -> import authz bypass
-      # -> process-adapter spawn(), CVSS 10.0, fixed upstream in 2026.416.0).
-      # Single-user deployment: nobody legitimate needs open signup anyway.
-      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
-      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
-      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
-      # Lets the built-in claude_local adapter run Claude Code on your subscription
-      # (genuine Claude Code binary — allowed). Try an agent without wiring Hermes.
-      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
-    volumes:
-      - paperclip_data:/paperclip
-      # Patches /etc/hosts at container start so paperclip's own self-calls to its
-      # PAPERCLIP_PUBLIC_URL hostname resolve to loopback instead of leaving the box
-      # and hairpinning back through an edge proxy (e.g. Cloudflare), which can
-      # block/time out non-browser requests. Reuses PAPERCLIP_PUBLIC_URL — the same
-      # var that tells paperclip which origin is valid — for both purposes.
-      - ./paperclip/patch-hosts-entrypoint.sh:/usr/local/bin/patch-hosts-entrypoint.sh:ro
-    entrypoint: ["/bin/sh", "/usr/local/bin/patch-hosts-entrypoint.sh"]
-    # Overriding entrypoint drops the image's default CMD, so it must be restated
-    # here verbatim (see `docker inspect ghcr.io/paperclipai/paperclip` Cmd).
-    command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
-    networks: [agents_net]
-    ports:
-      - "3100:3100"   # Coolify: map to a domain (governance dashboard)
-    depends_on:
-      paperclip-db:
-        condition: service_healthy
-    restart: unless-stopped
-    # Hard ceiling independent of per-agent maxConcurrentRuns (paperclip has no
-    # global "max concurrent tasks" setting): if many agents heartbeat at once,
-    # cgroups queue instead of the host OOM-thrashing (0 swap, 4 cores).
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
-          memory: 3G
-
+#  paperclip-db:
+#    image: postgres:17-alpine
+#    environment:
+#      POSTGRES_USER: paperclip
+#      POSTGRES_PASSWORD: paperclip
+#      POSTGRES_DB: paperclip
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+#      interval: 2s
+#      timeout: 5s
+#      retries: 30
+#    volumes:
+#      - pgdata:/var/lib/postgresql/data
+#    networks: [agents_net]
+#    restart: unless-stopped
+#
+#  paperclip:
+#    # Official published image. Tag overridable to test versions (PAPERCLIP_IMAGE).
+#    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
+#    environment:
+#      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
+#      PORT: "3100"
+#      SERVE_UI: "true"
+#      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+#      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+#      # Defense-in-depth against CVE-2026-41679 (unauthenticated RCE chain via
+#      # open signup -> self-approved CLI-auth challenge -> import authz bypass
+#      # -> process-adapter spawn(), CVSS 10.0, fixed upstream in 2026.416.0).
+#      # Single-user deployment: nobody legitimate needs open signup anyway.
+#      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
+#      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+#      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+#      # Lets the built-in claude_local adapter run Claude Code on your subscription
+#      # (genuine Claude Code binary — allowed). Try an agent without wiring Hermes.
+#      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
+#    volumes:
+#      - paperclip_data:/paperclip
+#      # Patches /etc/hosts at container start so paperclip's own self-calls to its
+#      # PAPERCLIP_PUBLIC_URL hostname resolve to loopback instead of leaving the box
+#      # and hairpinning back through an edge proxy (e.g. Cloudflare), which can
+#      # block/time out non-browser requests. Reuses PAPERCLIP_PUBLIC_URL — the same
+#      # var that tells paperclip which origin is valid — for both purposes.
+#      - ./paperclip/patch-hosts-entrypoint.sh:/usr/local/bin/patch-hosts-entrypoint.sh:ro
+#    entrypoint: ["/bin/sh", "/usr/local/bin/patch-hosts-entrypoint.sh"]
+#    # Overriding entrypoint drops the image's default CMD, so it must be restated
+#    # here verbatim (see `docker inspect ghcr.io/paperclipai/paperclip` Cmd).
+#    command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
+#    networks: [agents_net]
+#    ports:
+#      - "3100:3100"   # Coolify: map to a domain (governance dashboard)
+#    depends_on:
+#      paperclip-db:
+#        condition: service_healthy
+#    restart: unless-stopped
+#    # Hard ceiling independent of per-agent maxConcurrentRuns (paperclip has no
+#    # global "max concurrent tasks" setting): if many agents heartbeat at once,
+#    # cgroups queue instead of the host OOM-thrashing (0 swap, 4 cores).
+#    deploy:
+#      resources:
+#        limits:
+#          cpus: "2"
+#          memory: 3G
+#
   # ---- Claude Max proxy: subscription as OpenAI API (hermes brain) ----
   # Our own planner proxy (claude-max-api-proxy/) driving the genuine Claude Code CLI
   # (`claude --print`) on CLAUDE_CODE_OAUTH_TOKEN — the ALLOWED path (same binary as
