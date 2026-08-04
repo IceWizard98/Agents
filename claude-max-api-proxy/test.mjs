@@ -6,7 +6,7 @@ import {
   buildConversation,
   parseModelOutput,
   toOpenAIResponse,
-  resolveModel,
+  planModels,
   slimSchema,
 } from "./lib.mjs";
 
@@ -194,11 +194,16 @@ const tests = {
     assert.ok(!p.includes("VERBOSE_BODY_PROSE")); // nested schema prose stripped
   },
 
-  resolve_model_upgrades_haiku_when_tools() {
-    assert.equal(resolveModel("haiku", true), "sonnet"); // haiku can't plan tools
-    assert.equal(resolveModel("haiku", false), "haiku");  // plain chat stays haiku
-    assert.equal(resolveModel("opus", true), "opus");
-    assert.equal(resolveModel(undefined, false), "sonnet");
+  plan_models_haiku_escalates_only_on_tool_turns() {
+    // chat turn (no tools): haiku only, never escalate
+    assert.deepEqual(planModels("haiku", false), { first: "haiku", escalate: false });
+    // tool turn: run haiku first, escalate to sonnet if it proposes an action
+    assert.deepEqual(planModels("haiku", true), { first: "haiku", escalate: true });
+    // explicit strong model: honor it, single run, no escalation
+    assert.deepEqual(planModels("sonnet", true), { first: "sonnet", escalate: false });
+    assert.deepEqual(planModels("opus", true), { first: "opus", escalate: false });
+    // default (missing alias) is the cheap path
+    assert.deepEqual(planModels(undefined, false), { first: "haiku", escalate: false });
   },
 };
 

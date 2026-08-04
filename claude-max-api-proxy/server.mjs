@@ -15,7 +15,7 @@ import {
   buildConversation,
   parseModelOutput,
   toOpenAIResponse,
-  resolveModel,
+  planModels,
 } from "./lib.mjs";
 
 const PORT = Number(process.env.PORT || 3456);
@@ -44,13 +44,15 @@ function release() {
   if (next) next();
 }
 
-// Map any incoming OpenAI model id to a bare CLI tier alias.
+// Map any incoming OpenAI model id to a bare CLI tier alias. Default is haiku (the cheap
+// tier): an unknown/absent model takes the cheap-first path like everything else; a strong
+// model is used only when explicitly named (planModels honors opus/sonnet without escalating).
 function toAlias(model) {
   const m = String(model || "").replace(/^claude-code-cli\//, "");
   if (/opus/.test(m)) return "opus";
   if (/sonnet/.test(m)) return "sonnet";
   if (/haiku/.test(m)) return "haiku";
-  return "sonnet";
+  return "haiku";
 }
 
 // Run `claude --print` once, return its stdout text. Rejects on non-zero exit.
@@ -129,27 +131,36 @@ function streamResponse(res, full, model) {
 
 async function handleChat(req, res, body) {
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
-  const model = resolveModel(toAlias(body.model), hasTools);
+  const { first, escalate } = planModels(toAlias(body.model), hasTools);
   const messages = body.messages || [];
   const prefix = buildSystemPrefix(body.tools);
   const systemPrompt = prefix ? `${PLANNER_SYSTEM}\n\n${prefix}` : PLANNER_SYSTEM;
   const conversation = buildConversation(messages);
-  let text;
+  let text, model = first, parsed;
   await acquire();
   try {
-    text = await runClaude(systemPrompt, conversation, model);
+    text = await runClaude(systemPrompt, conversation, first);
+    parsed = parseModelOutput(text);
+    // Cheap-first: haiku only pays for chat turns. When it proposes a tool call, redo the
+    // turn on sonnet (better at complex MCP arg schemas) and use that result instead.
+    if (escalate && parsed.type === "action") {
+      model = "sonnet";
+      text = await runClaude(systemPrompt, conversation, model);
+      parsed = parseModelOutput(text);
+    }
+    // Design blind spot made measurable (opt-in): a tool-bearing turn that returns prose is
+    // usually a legit chat reply, but it's ALSO how a skipped-tool would look — the two are
+    // indistinguishable, so we can't auto-correct it. Under LOG_USAGE, surface the rate so
+    // it can be watched on real MCP traffic.
+    if (process.env.LOG_USAGE && hasTools && parsed.type !== "action") {
+      console.log(`[cheap-first] tool-bearing turn returned prose on model=${model} (no tool called)`);
+    }
   } catch (e) {
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: { message: String(e.message || e), type: "cli_error" } }));
     return;
   } finally {
     release();
-  }
-  const parsed = parseModelOutput(text);
-  // A tool turn that came back as prose (not a protocol block) means Hermes gets a
-  // guessed answer instead of a tool call — surface it instead of failing silently.
-  if (hasTools && !parsed.matched) {
-    console.warn(`[claude-max-api-proxy] tool turn produced no action block (model=${model}); returning prose as final`);
   }
   const full = toOpenAIResponse(parsed, model, randomUUID());
   if (body.stream) streamResponse(res, full, model);

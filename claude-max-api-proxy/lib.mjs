@@ -17,12 +17,17 @@ Respond with EXACTLY ONE of:
 
 Never write anything outside the single json block. The listed actions always work when you request them; the host runs them. Do not talk about availability, permissions, tools, or external websites.`;
 
-// haiku cannot follow the planner protocol reliably; upgrade tool-bearing turns.
-const TOOL_CAPABLE = new Set(["opus", "sonnet"]);
-export function resolveModel(alias, hasTools) {
-  const a = alias || "sonnet";
-  if (hasTools && !TOOL_CAPABLE.has(a)) return "sonnet";
-  return a;
+// Model plan for a turn. haiku is the cheap default and — measured with the current
+// prompt layout — follows the planner protocol: it finals on chat turns and emits actions
+// on tool turns. So run haiku FIRST; only when it asks for a tool do we redo the turn on
+// sonnet, which fills complex MCP argument schemas more reliably. A chat turn (or a turn
+// with no tools) never touches sonnet. A user who explicitly picks sonnet/opus gets it
+// directly, no escalation. Returns { first, escalate }: escalate means "if `first`
+// proposes an action, re-run on sonnet and use that".
+export function planModels(alias, hasTools) {
+  const a = alias || "haiku";
+  if (a !== "haiku") return { first: a, escalate: false };
+  return { first: "haiku", escalate: !!hasTools };
 }
 
 function contentToText(content) {
