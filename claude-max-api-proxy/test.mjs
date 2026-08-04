@@ -96,31 +96,42 @@ const tests = {
     assert.equal(out.choices[0].message.content, "hi");
   },
 
-  system_prefix_holds_stable_half_only() {
-    const msgs = [{ role: "system", content: "be terse" }, { role: "user", content: "ciao" }];
+  system_prefix_holds_catalog_only_not_agent_instructions() {
     const tools = [{ type: "function", function: { name: "get_weather", description: "w", parameters: { type: "object" } } }];
-    const prefix = buildSystemPrefix(msgs, tools);
+    const prefix = buildSystemPrefix(tools);
     assert.ok(prefix.includes("ACTIONS the host can perform:"));
     assert.ok(prefix.includes('"get_weather"'));
-    assert.ok(prefix.includes("AGENT INSTRUCTIONS:"));
-    assert.ok(prefix.includes("be terse"));
-    assert.ok(!prefix.includes("Conversation:")); // conversation must NOT be in the cached prefix
-    assert.ok(!prefix.includes("ciao"));
+    // agent instructions + conversation must NOT be in the cached prefix (they can vary per turn)
+    assert.ok(!prefix.includes("AGENT INSTRUCTIONS:"));
+    assert.ok(!prefix.includes("Conversation:"));
   },
 
-  conversation_holds_volatile_half_only() {
+  system_prefix_sorts_actions_for_stable_cache() {
+    const mk = (n) => ({ type: "function", function: { name: n, description: "", parameters: {} } });
+    // same set, different order -> identical prefix, or the cache would never hit
+    assert.equal(buildSystemPrefix([mk("b"), mk("a")]), buildSystemPrefix([mk("a"), mk("b")]));
+    assert.ok(buildSystemPrefix([mk("b"), mk("a")]).indexOf('"a"') < buildSystemPrefix([mk("b"), mk("a")]).indexOf('"b"'));
+  },
+
+  system_prefix_empty_without_tools() {
+    assert.equal(buildSystemPrefix([]), "");
+    assert.equal(buildSystemPrefix(undefined), "");
+  },
+
+  conversation_holds_agent_instructions_and_convo() {
     const conv = buildConversation([{ role: "system", content: "be terse" }, { role: "user", content: "ciao" }]);
-    assert.ok(conv.startsWith("Conversation:"));
+    assert.ok(conv.includes("AGENT INSTRUCTIONS:")); // agent instructions moved here (volatile)
+    assert.ok(conv.includes("be terse"));
+    assert.ok(conv.includes("Conversation:"));
     assert.ok(conv.includes("USER: ciao"));
     assert.ok(!conv.includes("ACTIONS")); // catalog must NOT ride on the volatile stdin
-    assert.ok(!conv.includes("be terse"));
   },
 
   split_recomposes_to_planner_prompt() {
     const msgs = [{ role: "system", content: "sys" }, { role: "user", content: "hi" }];
     const tools = [{ type: "function", function: { name: "t", description: "d", parameters: {} } }];
     const whole = buildPlannerPrompt(msgs, tools);
-    assert.equal(whole, `${buildSystemPrefix(msgs, tools)}\n\n${buildConversation(msgs)}`);
+    assert.equal(whole, `${buildSystemPrefix(tools)}\n\n${buildConversation(msgs)}`);
   },
 
   slim_strips_nested_prose_keeps_structure() {

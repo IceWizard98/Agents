@@ -75,20 +75,29 @@ function toolsToActions(tools) {
   });
 }
 
-// The STABLE half of the prompt: action catalog + agent instructions. It repeats
-// byte-for-byte every turn, so the caller puts it in the CLI system prompt (via
-// --system-prompt-file) where Claude Code marks it cacheable — measured: cached with a
-// 1h TTL, so repeated turns read it back at ~10% cost instead of re-sending the whole
-// tool catalog. Keep this independent of the conversation so a new user message can't
-// bust the cached prefix.
-export function buildSystemPrefix(messages, tools) {
-  const lines = [];
-  const actions = toolsToActions(tools);
-  if (actions.length) {
-    lines.push("ACTIONS the host can perform:");
-    lines.push(JSON.stringify(actions));
-    lines.push("");
+// The STABLE, cacheable half: the action catalog ONLY. Put in the CLI system prompt (via
+// --system-prompt-file) where Claude Code caches it (1h TTL, measured), so repeated turns
+// re-read the whole tool catalog at ~10% cost instead of re-sending it.
+// Two things keep it byte-stable so the cache actually hits:
+//  - sorted by action name: the client's tool ordering can't bust the cache.
+//  - agent instructions are DELIBERATELY excluded (they live in buildConversation): a
+//    host system prompt can carry per-turn-varying text (date, context), which would bust
+//    the cached prefix every turn and — worse — bill cache WRITES (+25%) each time.
+export function buildSystemPrefix(tools) {
+  const actions = toolsToActions(tools).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  if (!actions.length) return "";
+  return `ACTIONS the host can perform:\n${JSON.stringify(actions)}`;
+}
+
+// The VOLATILE half: agent instructions + conversation. Both can change per turn, so they
+// go on stdin (unlimited size, not cached) — keeping them out of the cached prefix.
+export function buildConversation(messages) {
+  // Map tool_call_id -> action name so a later tool result can name its action.
+  const idToName = {};
+  for (const m of messages) {
+    for (const tc of m.tool_calls || []) idToName[tc.id] = tc.function?.name || "action";
   }
+  const lines = [];
   const agentInstructions = messages
     .filter((m) => m.role === "system")
     .map((m) => contentToText(m.content))
@@ -97,18 +106,9 @@ export function buildSystemPrefix(messages, tools) {
   if (agentInstructions) {
     lines.push("AGENT INSTRUCTIONS:");
     lines.push(agentInstructions);
+    lines.push("");
   }
-  return lines.join("\n").trim();
-}
-
-// The VOLATILE half: the conversation, which grows every turn. Goes on stdin.
-export function buildConversation(messages) {
-  // Map tool_call_id -> action name so a later tool result can name its action.
-  const idToName = {};
-  for (const m of messages) {
-    for (const tc of m.tool_calls || []) idToName[tc.id] = tc.function?.name || "action";
-  }
-  const lines = ["Conversation:"];
+  lines.push("Conversation:");
   for (const m of messages) {
     if (m.role === "system") continue;
     if (m.role === "user") {
@@ -136,7 +136,7 @@ export function buildConversation(messages) {
 // Whole prompt as one string (prefix + conversation). Kept for callers/tests that want
 // the un-split form; the server splits it to exploit prompt caching.
 export function buildPlannerPrompt(messages, tools) {
-  const prefix = buildSystemPrefix(messages, tools);
+  const prefix = buildSystemPrefix(tools);
   const conv = buildConversation(messages);
   return prefix ? `${prefix}\n\n${conv}` : conv;
 }

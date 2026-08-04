@@ -6,7 +6,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, unlinkSync } from "node:fs";
+import { writeFileSync, unlinkSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -62,10 +62,13 @@ function toAlias(model) {
 function runClaude(systemPrompt, conversation, model) {
   return new Promise((resolve, reject) => {
     const sysFile = join(tmpdir(), `planner-sys-${randomUUID()}.txt`);
-    try { writeFileSync(sysFile, systemPrompt); } catch (e) { return reject(e); }
+    // 0600: the file holds the planner system prompt; keep it unreadable to other users on
+    // a shared host during the brief write..unlink window. (The OAuth token is NOT here.)
+    try { writeFileSync(sysFile, systemPrompt, { mode: 0o600 }); } catch (e) { return reject(e); }
     const cleanup = () => { try { unlinkSync(sysFile); } catch { /* already gone */ } };
     const args = [
       "--print",
+      "--output-format", "json", // structured result → lets us read cache usage (see LOG_USAGE)
       "--exclude-dynamic-system-prompt-sections",
       "--system-prompt-file", sysFile,
       "--disallowedTools", ...DISALLOWED_TOOLS,
@@ -84,10 +87,23 @@ function runClaude(systemPrompt, conversation, model) {
     child.on("close", (code) => {
       clearTimeout(timer);
       cleanup();
-      if (code === 0) resolve(out.trim());
-      else reject(new Error(`claude exited ${code}: ${err.slice(0, 500)}`));
+      if (code !== 0) return reject(new Error(`claude exited ${code}: ${err.slice(0, 500)}`));
+      let obj;
+      try { obj = JSON.parse(out); } catch { return reject(new Error(`claude non-JSON output: ${out.slice(0, 300)}`)); }
+      if (obj.is_error) return reject(new Error(`claude error: ${String(obj.result || obj.subtype || "unknown").slice(0, 300)}`));
+      logUsage(obj.usage, model);
+      resolve(String(obj.result || "").trim());
     });
   });
+}
+
+// One-line cache diagnostic, opt-in via LOG_USAGE=1. The whole point of the caching split
+// is to turn re-sent catalog tokens into cache_read; if cache_creation dominates instead,
+// the prefix isn't stable (varying tools/instructions) and we're paying the +25% write
+// premium every turn. This surfaces which is happening on real Hermes traffic.
+function logUsage(u, model) {
+  if (!process.env.LOG_USAGE || !u) return;
+  console.log(`[usage] model=${model} input=${u.input_tokens ?? 0} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} output=${u.output_tokens ?? 0}`);
 }
 
 function sse(res, obj) { res.write(`data: ${JSON.stringify(obj)}\n\n`); }
@@ -115,7 +131,7 @@ async function handleChat(req, res, body) {
   const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
   const model = resolveModel(toAlias(body.model), hasTools);
   const messages = body.messages || [];
-  const prefix = buildSystemPrefix(messages, body.tools);
+  const prefix = buildSystemPrefix(body.tools);
   const systemPrompt = prefix ? `${PLANNER_SYSTEM}\n\n${prefix}` : PLANNER_SYSTEM;
   const conversation = buildConversation(messages);
   let text;
@@ -166,6 +182,21 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: { message: "not found", type: "not_found" } }));
 });
 
+// Best-effort sweep of planner-sys-* files a previous run left behind if it was killed
+// hard (SIGKILL/crash skips the per-request cleanup). Runs once at boot before any request
+// of this instance exists. Assumes one proxy instance per tmpdir (true per container); if
+// two instances shared a tmpdir this could unlink a peer's in-flight file — not our deploy.
+function sweepStaleTempFiles() {
+  try {
+    for (const f of readdirSync(tmpdir())) {
+      if (f.startsWith("planner-sys-") && f.endsWith(".txt")) {
+        try { unlinkSync(join(tmpdir(), f)); } catch { /* raced or gone */ }
+      }
+    }
+  } catch { /* tmpdir unreadable — nothing to sweep */ }
+}
+
 server.listen(PORT, "0.0.0.0", () => {
+  sweepStaleTempFiles();
   console.log(`[claude-max-api-proxy] planner proxy on 0.0.0.0:${PORT}`);
 });
