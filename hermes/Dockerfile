@@ -20,6 +20,15 @@ RUN apt-get update && apt-get install -y wget && \
     ln -sf /usr/local/go/bin/go /usr/local/bin/go && \
     ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
+# Chromium headless per far navigare il web all'agent (Playwright/Puppeteer o CLI
+# headless). --no-install-recommends tiene il layer leggero; chromium tira le sue
+# librerie Xlib/nss come dipendenze hard, il resto (font extra, ffmpeg) resta fuori.
+# Debian: pacchetto `chromium`. CHROME_BIN aiuta i tool a trovare il binario.
+ENV CHROME_BIN=/usr/bin/chromium
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        chromium fonts-liberation && \
+    rm -rf /var/lib/apt/lists/*
+
 # Pre-build the web dashboard dist so `hermes dashboard --skip-build` can serve it
 # without npm at runtime (used by the hermes-dashboard service). ~10s, baked once.
 RUN cd /opt/hermes/web && npm run build
