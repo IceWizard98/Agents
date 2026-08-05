@@ -135,6 +135,21 @@ _flatten-plugins:
         d=$(dirname "$f"); cp -R "$d" ".skills-dist/$(basename "$d")"
     done
 
+# SSH into a server and drop into a shell inside its hermes container.
+# Usage: just hermes-shell <server> [project=agents] [environment=production]
+hermes-shell server project="agents" environment="production":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for v in "{{project}}" "{{environment}}"; do
+      [[ "$v" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid project/environment '$v' (allowed: [a-zA-Z0-9_-]+)" >&2; exit 1; }
+    done
+    cid=$(ssh "{{server}}" "docker ps --no-trunc \
+        --filter 'label=coolify.projectName={{project}}' \
+        --filter 'label=coolify.environmentName={{environment}}'" \
+        | grep -i hermes | awk '{print $1}' | head -1)
+    [ -n "$cid" ] || { echo "no hermes container on {{server}} ({{project}}/{{environment}})" >&2; exit 1; }
+    ssh -t "{{server}}" "docker exec -it $cid sh"
+
 # Show what would be pushed
 skills-list:
     @echo "personal skills ({{skills_src}}):"; ls -1 "{{skills_src}}" 2>/dev/null || echo "  (none)"
