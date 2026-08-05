@@ -140,8 +140,8 @@ _flatten-plugins:
 hermes-shell server project="agents" environment="production":
     #!/usr/bin/env bash
     set -euo pipefail
-    for v in "{{project}}" "{{environment}}"; do
-      [[ "$v" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid project/environment '$v' (allowed: [a-zA-Z0-9_-]+)" >&2; exit 1; }
+    for v in "{{server}}" "{{project}}" "{{environment}}"; do
+      [[ "$v" =~ ^[a-zA-Z0-9_.-]+$ ]] || { echo "invalid arg '$v' (allowed: [a-zA-Z0-9_.-]+)" >&2; exit 1; }
     done
     cid=$(ssh "{{server}}" "docker ps --no-trunc \
         --filter 'label=coolify.projectName={{project}}' \
