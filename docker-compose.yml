@@ -2,7 +2,7 @@
 # hermes (Nous Research) = runtime + Telegram chat + MCP client, on a Claude Code session.
 # paperclip (paperclipai) = governance/orchestration: hires hermes as a worker via the
 #   built-in `hermes_gateway` adapter, recurring tasks, budget, audit.
-# coding / jira / mcp-google / mcp-icloud = MCP servers (tools) attached to hermes.
+# mcp-google / mcp-icloud = MCP servers (tools) attached to hermes.
 # Local: `docker compose up -d --build`. Coolify: import this file + env secrets.
 name: agents
 
@@ -14,8 +14,6 @@ volumes:
   hermes_data: {}
   pgdata: {}
   paperclip_data: {}
-  coding_home: {}
-  coding_repos: {}
   google_tokens: {}
   claude_proxy_home: {}
 
@@ -35,6 +33,13 @@ services:
       - HERMES_MODEL=${HERMES_MODEL:-haiku}
       - HERMES_BASE_URL=${HERMES_BASE_URL:-http://claude-max-api-proxy:3456/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-sk-local-proxy}
+      # Second custom provider: Google Gemini, direct via its OpenAI-compatible
+      # endpoint (no proxy — an API key is allowed over raw HTTP). Switch brains with
+      # HERMES_PROVIDER=gemini (default claude-max); GEMINI_MODEL sets model.default
+      # when gemini is active (a claude tier alias like `haiku` would 400 at Google).
+      - HERMES_PROVIDER=${HERMES_PROVIDER:-claude-max}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       # OpenRouter kept for the config fallback_model only (free rollover on 429).
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       # API server: used by paperclip to call hermes (hermes_gateway adapter).
@@ -56,12 +61,6 @@ services:
     depends_on:
       claude-max-api-proxy:
         condition: service_healthy
-      coding:
-        condition: service_healthy
-      github-mcp:
-        condition: service_healthy
-      jira:
-        condition: service_started
       mcp-google:
         condition: service_started
       mcp-icloud:
@@ -176,47 +175,6 @@ services:
     restart: unless-stopped
 
   # ---- MCP servers (hermes tools) ----
-  # coding: Claude Code CLI via `claude mcp serve`, bridged to HTTP by supergateway.
-  coding:
-    build: ./coding
-    environment:
-      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
-      - GITHUB_TOKEN=${GITHUB_TOKEN}
-      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME}
-      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL}
-      - PORT=9100
-    volumes:
-      - coding_home:/home/app/.claude
-      - coding_repos:/work
-    networks: [agents_net]
-    restart: unless-stopped
-
-  # github-mcp: official GitHub MCP server (branch/commit/PR via API), self-hosted.
-  github-mcp:
-    build: ./github-mcp
-    environment:
-      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}
-      # Restrict surface: repos (branch/commit/file) + pull_requests only.
-      # NB: merge/delete still live inside these toolsets; for true no-merge use
-      # branch protection or a PAT without merge permission.
-      - GITHUB_TOOLSETS=repos,pull_requests
-      - PORT=9400
-    networks: [agents_net]
-    restart: unless-stopped
-
-  jira:
-    build: ./jira
-    environment:
-      - JIRA_URL=${JIRA_URL}
-      - JIRA_EMAIL=${JIRA_EMAIL}
-      - JIRA_API_TOKEN=${JIRA_API_TOKEN}
-      # Single-user deployment: Hermes calls without per-user identity headers.
-      # Let mcp-atlassian serve those requests with the operator's global creds
-      # (otherwise UserTokenMiddleware rejects every request with 401).
-      - ALLOW_GLOBAL_CRED_FALLBACK=true
-    networks: [agents_net]
-    restart: unless-stopped
-
   mcp-google:
     build: ./mcp-google
     environment:
