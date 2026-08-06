@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/paperclip-control .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/paperclip-control .
 
 # --- distroless runtime ---
 FROM gcr.io/distroless/static-debian12
