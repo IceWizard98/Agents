@@ -1,8 +1,8 @@
 # agent-system stack.
 # hermes (Nous Research) = runtime + Telegram chat + MCP client, on a Claude Code session.
-# paperclip (paperclipai) = governance/orchestration: hires hermes as a worker via the
-#   built-in `hermes_gateway` adapter, recurring tasks, budget, audit.
-# mcp-google / mcp-icloud = MCP servers (tools) attached to hermes.
+# claude-max-api-proxy = Claude Max subscription exposed as an OpenAI API (hermes brain).
+# mcp-* = MCP servers (tools) attached to hermes: google, icloud, fetch, supermemory.
+# supermemory = self-hosted persistent memory (behind mcp-supermemory).
 # Local: `docker compose up -d --build`. Coolify: import this file + env secrets.
 name: agents
 
@@ -12,10 +12,9 @@ networks:
 
 volumes:
   hermes_data: {}
-  pgdata: {}
-  paperclip_data: {}
   google_tokens: {}
   claude_proxy_home: {}
+  supermemory_data: {}
 
 services:
   # ---- Hermes: AI worker + chat gateway (Telegram) + MCP client ----
@@ -42,7 +41,7 @@ services:
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       # OpenRouter kept for the config fallback_model only (free rollover on 429).
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      # API server: used by paperclip to call hermes (hermes_gateway adapter).
+      # API server (internal, :8642): external gateway entrypoint into hermes.
       - API_SERVER_ENABLED=true
       - API_SERVER_KEY=${API_SERVER_KEY}
       # Telegram channel.
@@ -54,9 +53,7 @@ services:
       # (hermes/config.example.yaml), then owned by Hermes. Model comes from HERMES_MODEL.
       - hermes_data:/opt/data
     networks: [agents_net]
-    # 8642 = API server (internal, for paperclip). No domain needed.
-    # Dashboard (:9119) runs as a separate `hermes-dashboard` service below —
-    # `gateway run` here does not serve it.
+    # 8642 = API server (internal). No domain needed.
     restart: unless-stopped
     depends_on:
       claude-max-api-proxy:
@@ -65,94 +62,11 @@ services:
         condition: service_started
       mcp-icloud:
         condition: service_started
-      #mcp-paperclip:
-        #condition: service_started
+      mcp-fetch:
+        condition: service_started
+      mcp-supermemory:
+        condition: service_started
 
-  # Hermes dashboard (web UI): separate process from the gateway, same data
-  # volume/image. Public bind (0.0.0.0) requires an auth provider — basic auth
-  # via HERMES_DASHBOARD_BASIC_AUTH_*.
- # hermes-dashboard:
- #   build: ./hermes
- #   command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--skip-build", "--no-open"]
- #   environment:
- #     - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
- #     - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must be set}
- #     - HERMES_DASHBOARD_BASIC_AUTH_SECRET=${HERMES_DASHBOARD_BASIC_AUTH_SECRET:?HERMES_DASHBOARD_BASIC_AUTH_SECRET must be set}
- #     - HERMES_DASHBOARD_PUBLIC_URL=${HERMES_DASHBOARD_PUBLIC_URL:-http://localhost:9119}
- #   volumes:
- #     - hermes_data:/opt/data
- #   networks: [agents_net]
- #   ports:
- #     - "9119:9119"
- #   restart: unless-stopped
- #   depends_on:
- #     hermes:
- #       condition: service_started
-
-  # ---- Paperclip: orchestration, governance, recurring tasks ----
-#  paperclip-db:
-#    image: postgres:17-alpine
-#    environment:
-#      POSTGRES_USER: paperclip
-#      POSTGRES_PASSWORD: paperclip
-#      POSTGRES_DB: paperclip
-#    healthcheck:
-#      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
-#      interval: 2s
-#      timeout: 5s
-#      retries: 30
-#    volumes:
-#      - pgdata:/var/lib/postgresql/data
-#    networks: [agents_net]
-#    restart: unless-stopped
-#
-#  paperclip:
-#    # Official published image. Tag overridable to test versions (PAPERCLIP_IMAGE).
-#    image: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
-#    environment:
-#      DATABASE_URL: postgres://paperclip:paperclip@paperclip-db:5432/paperclip
-#      PORT: "3100"
-#      SERVE_UI: "true"
-#      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-#      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
-#      # Defense-in-depth against CVE-2026-41679 (unauthenticated RCE chain via
-#      # open signup -> self-approved CLI-auth challenge -> import authz bypass
-#      # -> process-adapter spawn(), CVSS 10.0, fixed upstream in 2026.416.0).
-#      # Single-user deployment: nobody legitimate needs open signup anyway.
-#      PAPERCLIP_AUTH_DISABLE_SIGN_UP: "true"
-#      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
-#      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
-#      # Lets the built-in claude_local adapter run Claude Code on your subscription
-#      # (genuine Claude Code binary — allowed). Try an agent without wiring Hermes.
-#      CLAUDE_CODE_OAUTH_TOKEN: "${CLAUDE_CODE_OAUTH_TOKEN}"
-#    volumes:
-#      - paperclip_data:/paperclip
-#      # Patches /etc/hosts at container start so paperclip's own self-calls to its
-#      # PAPERCLIP_PUBLIC_URL hostname resolve to loopback instead of leaving the box
-#      # and hairpinning back through an edge proxy (e.g. Cloudflare), which can
-#      # block/time out non-browser requests. Reuses PAPERCLIP_PUBLIC_URL — the same
-#      # var that tells paperclip which origin is valid — for both purposes.
-#      - ./paperclip/patch-hosts-entrypoint.sh:/usr/local/bin/patch-hosts-entrypoint.sh:ro
-#    entrypoint: ["/bin/sh", "/usr/local/bin/patch-hosts-entrypoint.sh"]
-#    # Overriding entrypoint drops the image's default CMD, so it must be restated
-#    # here verbatim (see `docker inspect ghcr.io/paperclipai/paperclip` Cmd).
-#    command: ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
-#    networks: [agents_net]
-#    ports:
-#      - "3100:3100"   # Coolify: map to a domain (governance dashboard)
-#    depends_on:
-#      paperclip-db:
-#        condition: service_healthy
-#    restart: unless-stopped
-#    # Hard ceiling independent of per-agent maxConcurrentRuns (paperclip has no
-#    # global "max concurrent tasks" setting): if many agents heartbeat at once,
-#    # cgroups queue instead of the host OOM-thrashing (0 swap, 4 cores).
-#    deploy:
-#      resources:
-#        limits:
-#          cpus: "2"
-#          memory: 3G
-#
   # ---- Claude Max proxy: subscription as OpenAI API (hermes brain) ----
   # Our own planner proxy (claude-max-api-proxy/) driving the genuine Claude Code CLI
   # (`claude --print`) on CLAUDE_CODE_OAUTH_TOKEN — the ALLOWED path (same binary as
@@ -204,11 +118,96 @@ services:
     networks: [agents_net]
     restart: unless-stopped
 
-  # mcp-paperclip: agent-fleet control (stop/restart all agents, retry
-  # blocked issues) against the Paperclip REST API. Paperclip's own MCP
-  # package only wraps issue CRUD, no agent lifecycle/retry — this fills
-  # that gap. Requires a board-level PAPERCLIP_ADMIN_API_KEY (dashboard > API keys) —
-  # named _ADMIN_ to not collide with the unrelated PAPERCLIP_API_KEY the
-  # hermes_gateway onboarding flow issues (see README "Connect Hermes to Paperclip"):
-  # that one is agent-scoped, this one is board/company-scoped. Same env var name
-  # for both would have silently broken whichever flow ran second.
+  # FlareSolverr: drives a real browser to pass Cloudflare/DDoS-Guard challenges
+  # that block plain chromium/curl. Plain HTTP API on :8191 — hermes reaches it via
+  # the mcp-fetch tool below, not directly. Internal only (no host port); bundles its
+  # own browser. NOTE: official image is amd64 — on Apple-Silicon/colima it may not
+  # start (the Coolify prod host is x86, so prod is fine).
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    environment:
+      - LOG_LEVEL=${FLARESOLVERR_LOG_LEVEL:-info}
+    networks: [agents_net]
+    restart: unless-stopped
+
+  # mcp-fetch: wraps FlareSolverr as an MCP `fetch_url` tool for hermes (streamable
+  # HTTP on :9002). Custom Go server (same pattern as mcp-icloud).
+  mcp-fetch:
+    build: ./mcp-fetch
+    environment:
+      - FLARESOLVERR_URL=http://flaresolverr:8191/v1
+    networks: [agents_net]
+    restart: unless-stopped
+    depends_on:
+      flaresolverr:
+        condition: service_started
+
+  # supermemory: self-hosted memory engine (REST on :6767). Single binary, embedded
+  # graph engine + local Xenova embeddings, no external DB. Internal only — hermes
+  # reaches it via mcp-supermemory below. LLM (used only on WRITE: fact extraction,
+  # contradiction resolution) is switchable via SUPERMEMORY_LLM_* — default points at
+  # the in-stack claude-max-api-proxy; set them to OpenRouter to route elsewhere.
+  # Memory ceiling: local ONNX embeddings hold the model resident; cap keeps a spike
+  # from OOM-ing the box (recurring failure mode on this host).
+  supermemory:
+    build: ./supermemory
+    environment:
+      - SUPERMEMORY_EMBEDDING_PROVIDER=${SUPERMEMORY_EMBEDDING_PROVIDER:-local}
+      - OPENAI_BASE_URL=${SUPERMEMORY_LLM_BASE_URL:-http://claude-max-api-proxy:3456/v1}
+      - OPENAI_API_KEY=${SUPERMEMORY_LLM_API_KEY:-sk-local-proxy}
+      - OPENAI_MODEL=${SUPERMEMORY_LLM_MODEL:-sonnet}
+    volumes:
+      # Mounts at the data dir (SUPERMEMORY_DATA_DIR=/data in the image), NOT the
+      # install dir (/root/.supermemory) — mounting over the latter would shadow
+      # the installed binary and the server would fail to start on first boot.
+      - supermemory_data:/data
+    networks: [agents_net]
+    restart: unless-stopped
+    # Liveness: curl exits 0 on any HTTP response, non-zero only on connection
+    # refused — so a failed boot / OOM restart-loop is visible instead of silent.
+    # start_period covers the first-boot embedding-model download (~106MB).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:6767/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      # Write-path fact-extraction calls the proxy; start it first so early
+      # ingests don't fail extraction (v3 doc-search would still work without it).
+      claude-max-api-proxy:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # Measured at boot: baseline ~1.2G + the server's own ingest budget
+          # (+1G, "memory limit above baseline" log) => ~2.2G write-time peak, so
+          # 2G would OOM. 3G leaves margin; the box has ~5G free. Lower the app's
+          # own budget with SUPERMEMORY_EMBEDDING_RAM_LIMIT if this must shrink.
+          memory: 3G
+
+  # mcp-supermemory: wraps the supermemory REST API as MCP tools (add_memory,
+  # search_memory) for hermes (streamable HTTP on :9003). Custom Go server (same
+  # pattern as mcp-fetch). The self-hosted binary is REST-only; this is the bridge.
+  mcp-supermemory:
+    build: ./mcp-supermemory
+    environment:
+      - SUPERMEMORY_URL=http://supermemory:6767
+      # Default scope so single-user memories group together across calls.
+      - SUPERMEMORY_CONTAINER_TAG=${SUPERMEMORY_CONTAINER_TAG:-hermes}
+      # supermemory auto-applies its key only to localhost; cross-container calls
+      # need it explicitly. The server writes it to <data-dir>/api-key on boot; we
+      # read it from the volume (mounted read-only below). Override with
+      # SUPERMEMORY_API_KEY only to pin a specific key.
+      - SUPERMEMORY_API_KEY=${SUPERMEMORY_API_KEY:-}
+      - SUPERMEMORY_API_KEY_FILE=/sm/api-key
+      # Per-request timeout: the write path runs synchronous LLM fact-extraction.
+      - SUPERMEMORY_TIMEOUT_SECONDS=${SUPERMEMORY_TIMEOUT_SECONDS:-120}
+    volumes:
+      # Read-only: only to read the auto-generated api-key the server persists.
+      - supermemory_data:/sm:ro
+    networks: [agents_net]
+    restart: unless-stopped
+    depends_on:
+      supermemory:
+        condition: service_started

@@ -53,5 +53,9 @@ mcp_servers:
     url: http://mcp-google:9000/mcp
   icloud:
     url: http://mcp-icloud:9001/mcp
-  paperclip:
-    url: http://mcp-paperclip:9500/mcp
+  # Cloudflare-bypass web fetch (FlareSolverr behind mcp-fetch).
+  fetch:
+    url: http://mcp-fetch:9002/mcp
+  # Persistent memory (self-hosted supermemory behind mcp-supermemory).
+  supermemory:
+    url: http://mcp-supermemory:9003/mcp
