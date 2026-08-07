@@ -21,9 +21,18 @@ const (
 
 // SolveRequest is the FlareSolverr POST /v1 payload.
 type SolveRequest struct {
-	Cmd        string `json:"cmd"`
-	URL        string `json:"url"`
-	MaxTimeout int    `json:"maxTimeout"`
+	Cmd        string        `json:"cmd"`
+	URL        string        `json:"url"`
+	MaxTimeout int           `json:"maxTimeout"`
+	Cookies    []SolveCookie `json:"cookies,omitempty"`
+}
+
+// SolveCookie is a cookie passed to FlareSolverr so cookie-only sites
+// (Twitter/X, Reddit) can be fetched with a logged-in session.
+type SolveCookie struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain,omitempty"`
 }
 
 // SolveResult is the FlareSolverr response. status == "ok" means the challenge
@@ -42,7 +51,7 @@ type SolveResult struct {
 // Solver is the hexagonal port. Real adapter talks to FlareSolverr over HTTP;
 // tests use a fake.
 type Solver interface {
-	Solve(SolveRequest) (SolveResult, error)
+	Solve(context.Context, SolveRequest) (SolveResult, error)
 }
 
 // flareSolver is the real adapter: POSTs to a FlareSolverr /v1 endpoint.
@@ -51,15 +60,15 @@ type flareSolver struct {
 	client *http.Client
 }
 
-func (f flareSolver) Solve(req SolveRequest) (SolveResult, error) {
+func (f flareSolver) Solve(ctx context.Context, req SolveRequest) (SolveResult, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return SolveResult{}, fmt.Errorf("marshal flaresolverr request: %w", err)
 	}
-	// Client deadline must exceed FlareSolverr's own maxTimeout (challenge budget)
-	// so a genuinely slow solve isn't cut off here first. Margin covers browser
-	// spin-up + transfer.
-	ctx, cancel := context.WithTimeout(context.Background(),
+	// Deadline derives from the caller's ctx (so client cancellation propagates)
+	// but must exceed FlareSolverr's own maxTimeout (challenge budget) so a genuinely
+	// slow solve isn't cut off here first. Margin covers browser spin-up + transfer.
+	ctx, cancel := context.WithTimeout(ctx,
 		time.Duration(req.MaxTimeout)*time.Millisecond+30*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, f.url, bytes.NewReader(body))
@@ -103,7 +112,7 @@ type FetchResult struct {
 }
 
 // Fetch validates the request, drives the solver, and shapes the result.
-func Fetch(s Solver, in FetchRequest) (FetchResult, error) {
+func Fetch(ctx context.Context, s Solver, in FetchRequest) (FetchResult, error) {
 	url := strings.TrimSpace(in.URL)
 	if url == "" {
 		return FetchResult{}, fmt.Errorf("empty url")
@@ -120,7 +129,7 @@ func Fetch(s Solver, in FetchRequest) (FetchResult, error) {
 		maxChars = defaultMaxChars
 	}
 
-	res, err := s.Solve(SolveRequest{Cmd: "request.get", URL: url, MaxTimeout: timeout})
+	res, err := s.Solve(ctx, SolveRequest{Cmd: "request.get", URL: url, MaxTimeout: timeout})
 	if err != nil {
 		return FetchResult{}, fmt.Errorf("solve %s: %w", url, err)
 	}

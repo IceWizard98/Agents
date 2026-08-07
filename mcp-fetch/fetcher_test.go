@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,7 +19,7 @@ type fakeSolver struct {
 	err error
 }
 
-func (f *fakeSolver) Solve(req SolveRequest) (SolveResult, error) {
+func (f *fakeSolver) Solve(_ context.Context, req SolveRequest) (SolveResult, error) {
 	f.got = req
 	return f.res, f.err
 }
@@ -34,7 +35,7 @@ func okResult(html string) SolveResult {
 
 func TestFetch_HappyPath_ReturnsSolvedHTML(t *testing.T) {
 	fs := &fakeSolver{res: okResult("<html>hi</html>")}
-	out, err := Fetch(fs, FetchRequest{URL: "https://example.com"})
+	out, err := Fetch(context.Background(), fs, FetchRequest{URL: "https://example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,20 +55,20 @@ func TestFetch_HappyPath_ReturnsSolvedHTML(t *testing.T) {
 }
 
 func TestFetch_EmptyURL_Errors(t *testing.T) {
-	if _, err := Fetch(&fakeSolver{res: okResult("x")}, FetchRequest{URL: "  "}); err == nil {
+	if _, err := Fetch(context.Background(), &fakeSolver{res: okResult("x")}, FetchRequest{URL: "  "}); err == nil {
 		t.Fatal("expected error for empty url")
 	}
 }
 
 func TestFetch_NonHTTPScheme_Errors(t *testing.T) {
-	if _, err := Fetch(&fakeSolver{res: okResult("x")}, FetchRequest{URL: "ftp://host/f"}); err == nil {
+	if _, err := Fetch(context.Background(), &fakeSolver{res: okResult("x")}, FetchRequest{URL: "ftp://host/f"}); err == nil {
 		t.Fatal("expected error for non-http scheme")
 	}
 }
 
 func TestFetch_SolverTransportError_Propagated(t *testing.T) {
 	sentinel := errors.New("connection refused")
-	_, err := Fetch(&fakeSolver{err: sentinel}, FetchRequest{URL: "https://example.com"})
+	_, err := Fetch(context.Background(), &fakeSolver{err: sentinel}, FetchRequest{URL: "https://example.com"})
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("error should wrap solver error, got %v", err)
 	}
@@ -75,7 +76,7 @@ func TestFetch_SolverTransportError_Propagated(t *testing.T) {
 
 func TestFetch_FlareSolverrStatusError_Errors(t *testing.T) {
 	res := SolveResult{Status: "error", Message: "Cloudflare challenge not solved"}
-	_, err := Fetch(&fakeSolver{res: res}, FetchRequest{URL: "https://example.com"})
+	_, err := Fetch(context.Background(), &fakeSolver{res: res}, FetchRequest{URL: "https://example.com"})
 	if err == nil || !strings.Contains(err.Error(), "not solved") {
 		t.Fatalf("expected flaresolverr status error, got %v", err)
 	}
@@ -83,7 +84,7 @@ func TestFetch_FlareSolverrStatusError_Errors(t *testing.T) {
 
 func TestFetch_TruncatesToMaxChars(t *testing.T) {
 	fs := &fakeSolver{res: okResult(strings.Repeat("a", 500))}
-	out, err := Fetch(fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
+	out, err := Fetch(context.Background(), fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -94,7 +95,7 @@ func TestFetch_TruncatesToMaxChars(t *testing.T) {
 
 func TestFetch_ForwardsCustomTimeout(t *testing.T) {
 	fs := &fakeSolver{res: okResult("x")}
-	if _, err := Fetch(fs, FetchRequest{URL: "https://example.com", MaxTimeoutMs: 5000}); err != nil {
+	if _, err := Fetch(context.Background(), fs, FetchRequest{URL: "https://example.com", MaxTimeoutMs: 5000}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fs.got.MaxTimeout != 5000 {
@@ -104,7 +105,7 @@ func TestFetch_ForwardsCustomTimeout(t *testing.T) {
 
 func TestFetch_ExactBoundary_NotTruncated(t *testing.T) {
 	fs := &fakeSolver{res: okResult(strings.Repeat("a", 100))}
-	out, err := Fetch(fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
+	out, err := Fetch(context.Background(), fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestFetch_ExactBoundary_NotTruncated(t *testing.T) {
 
 func TestFetch_TruncatesOnRuneBoundary(t *testing.T) {
 	fs := &fakeSolver{res: okResult(strings.Repeat("é", 200))} // 2 bytes/rune
-	out, err := Fetch(fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
+	out, err := Fetch(context.Background(), fs, FetchRequest{URL: "https://example.com", MaxChars: 100})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestFlareSolver_Solve_PostsCorrectBodyAndDecodes(t *testing.T) {
 	defer srv.Close()
 
 	fs := flareSolver{url: srv.URL, client: srv.Client()}
-	res, err := fs.Solve(SolveRequest{Cmd: "request.get", URL: "https://x", MaxTimeout: 1000})
+	res, err := fs.Solve(context.Background(), SolveRequest{Cmd: "request.get", URL: "https://x", MaxTimeout: 1000})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +163,7 @@ func TestFlareSolver_Solve_HTTPErrorStatus_Errors(t *testing.T) {
 	defer srv.Close()
 
 	fs := flareSolver{url: srv.URL, client: srv.Client()}
-	if _, err := fs.Solve(SolveRequest{Cmd: "request.get", URL: "https://x"}); err == nil {
+	if _, err := fs.Solve(context.Background(), SolveRequest{Cmd: "request.get", URL: "https://x"}); err == nil {
 		t.Fatal("expected error on non-2xx flaresolverr response")
 	}
 }
