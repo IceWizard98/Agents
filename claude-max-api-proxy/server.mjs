@@ -21,6 +21,7 @@ import {
 const PORT = Number(process.env.PORT || 3456);
 const CLI_TIMEOUT_MS = Number(process.env.CLI_TIMEOUT_MS || 300000);
 const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY || 4);
+const MAX_BODY = Number(process.env.MAX_BODY || 10 * 1024 * 1024); // cap request body (OOM guard)
 const MODELS = ["opus", "sonnet", "haiku"];
 
 // The planner must PROPOSE, never execute — and the OAuth token lives in this process'
@@ -61,13 +62,27 @@ function toAlias(model) {
 // split is what makes Claude Code cache the catalog (1h TTL, measured) so repeated turns
 // re-read it at ~10% cost instead of re-sending it. A file (not --system-prompt argv)
 // avoids MAX_ARG_STRLEN / E2BIG on large catalogs.
-function runClaude(systemPrompt, conversation, model) {
+function runClaude(systemPrompt, conversation, model, res) {
   return new Promise((resolve, reject) => {
     const sysFile = join(tmpdir(), `planner-sys-${randomUUID()}.txt`);
     // 0600: the file holds the planner system prompt; keep it unreadable to other users on
     // a shared host during the brief write..unlink window. (The OAuth token is NOT here.)
     try { writeFileSync(sysFile, systemPrompt, { mode: 0o600 }); } catch (e) { return reject(e); }
-    const cleanup = () => { try { unlinkSync(sysFile); } catch { /* already gone */ } };
+    let killTimer = null;
+    // If the client hangs up before we've responded, kill the heavy child so it doesn't run
+    // out CLI_TIMEOUT_MS pinning a concurrency slot (SIGTERM, then SIGKILL after a grace).
+    const onClose = () => {
+      if (res && res.writableEnded) return;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 2000);
+      killTimer.unref?.();
+    };
+    const cleanup = () => {
+      try { unlinkSync(sysFile); } catch { /* already gone */ }
+      if (res) res.removeListener("close", onClose);
+      if (killTimer) clearTimeout(killTimer);
+    };
+    if (res) res.on("close", onClose);
     const args = [
       "--print",
       "--output-format", "json", // structured result → lets us read cache usage (see LOG_USAGE)
@@ -139,13 +154,13 @@ async function handleChat(req, res, body) {
   let text, model = first, parsed;
   await acquire();
   try {
-    text = await runClaude(systemPrompt, conversation, first);
+    text = await runClaude(systemPrompt, conversation, first, res);
     parsed = parseModelOutput(text);
     // Cheap-first: haiku only pays for chat turns. When it proposes a tool call, redo the
     // turn on sonnet (better at complex MCP arg schemas) and use that result instead.
     if (escalate && parsed.type === "action") {
       model = "sonnet";
-      text = await runClaude(systemPrompt, conversation, model);
+      text = await runClaude(systemPrompt, conversation, model, res);
       parsed = parseModelOutput(text);
     }
     // Design blind spot made measurable (opt-in): a tool-bearing turn that returns prose is
@@ -156,8 +171,12 @@ async function handleChat(req, res, body) {
       console.log(`[cheap-first] tool-bearing turn returned prose on model=${model} (no tool called)`);
     }
   } catch (e) {
+    // Log the detail server-side; return a generic message. The CLI's stderr/result
+    // is folded into e.message and could carry upstream credential-adjacent text —
+    // don't echo it back to the caller (even internal).
+    console.error(`[claude-max-api-proxy] cli error: ${String(e.message || e)}`);
     res.writeHead(502, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: { message: String(e.message || e), type: "cli_error" } }));
+    res.end(JSON.stringify({ error: { message: "upstream CLI error", type: "cli_error" } }));
     return;
   } finally {
     release();
@@ -178,14 +197,37 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "POST" && req.url === "/v1/chat/completions") {
     let data = "";
-    req.on("data", (c) => { data += c; });
+    let overflowed = false;
+    req.on("data", (c) => {
+      if (overflowed) return;
+      data += c;
+      if (data.length > MAX_BODY) {
+        overflowed = true; // stop appending; guard the "end" handler too
+        res.writeHead(413, { "Content-Type": "application/json", Connection: "close" });
+        res.end(JSON.stringify({ error: { message: "request body too large", type: "payload_too_large" } }));
+        req.destroy();
+      }
+    });
     req.on("end", () => {
+      if (overflowed) return;
       let body;
       try { body = JSON.parse(data); } catch {
         res.writeHead(400, { "Content-Type": "application/json" });
         return res.end(JSON.stringify({ error: { message: "invalid JSON body", type: "bad_request" } }));
       }
-      handleChat(req, res, body);
+      // JSON.parse("null"), a bare array, or a scalar are valid JSON but not a chat body;
+      // handleChat derefs body.tools/.messages, so reject anything that isn't a plain object.
+      if (typeof body !== "object" || body === null || Array.isArray(body)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ error: { message: "invalid JSON body", type: "bad_request" } }));
+      }
+      // handleChat is async; an un-awaited rejection would crash the process (Node 22).
+      handleChat(req, res, body).catch((e) => {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "internal error", type: "internal" } }));
+        } else { try { res.end(); } catch { /* already closed */ } }
+      });
     });
     return;
   }

@@ -81,7 +81,7 @@ func (f flareSolver) Solve(ctx context.Context, req SolveRequest) (SolveResult, 
 		return SolveResult{}, fmt.Errorf("flaresolverr request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return SolveResult{}, fmt.Errorf("read flaresolverr response: %w", err)
 	}
@@ -119,6 +119,9 @@ func Fetch(ctx context.Context, s Solver, in FetchRequest) (FetchResult, error) 
 	}
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return FetchResult{}, fmt.Errorf("url must start with http:// or https://: %q", url)
+	}
+	if err := validatePublicURL(url); err != nil {
+		return FetchResult{}, err
 	}
 	timeout := in.MaxTimeoutMs
 	if timeout <= 0 {

@@ -1,7 +1,9 @@
 # Thin layer over the official Hermes image: seed config + apply HERMES_MODEL from
 # env on every boot (s6 cont-init), so the model is env-driven (Coolify: set the env
 # var + redeploy — no manual step, no ${VAR} that Hermes won't expand).
-FROM nousresearch/hermes-agent
+# Pinned by digest: this image holds every stack credential — a floating tag would
+# silently pull whatever upstream pushed on the next rebuild. Bump deliberately.
+FROM nousresearch/hermes-agent@sha256:94f9348a221e63a83c239e5b292a682df246c99ae63bc4ed2c6ffe33d7bde0e3
 
 # curl: usato dall'agent a runtime (fetch HTTP da shell).
 RUN apt-get update && apt-get install -y --no-install-recommends curl && \

@@ -10,8 +10,31 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 )
+
+// authKey uses a double-check: fast path under lock, slow file read OUTSIDE the
+// lock, re-acquire to store. Under -race this catches any regression that writes
+// keyCache without re-acquiring the lock. All callers must observe the loaded key.
+func TestSuperMemory_AuthKey_ConcurrentLoadIsRaceFree(t *testing.T) {
+	f := t.TempDir() + "/api-key"
+	if err := os.WriteFile(f, []byte("thekey\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sm := &superMemory{keyFile: f}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if k := sm.authKey(); k != "thekey" {
+				t.Errorf("authKey = %q, want thekey", k)
+			}
+		}()
+	}
+	wg.Wait()
+}
 
 // fakePoster is a test double for the Poster port.
 type fakePoster struct {

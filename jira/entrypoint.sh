@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Client credentials from env (JIRA_URL / JIRA_EMAIL / JIRA_API_TOKEN).
 # mcp-atlassian reads these variables; Jira only (Confluence disabled).
-exec uvx mcp-atlassian \
+exec uvx mcp-atlassian==0.23.0 \
   --transport streamable-http \
   --host 0.0.0.0 --port 9200 \
   --jira-url "$JIRA_URL" \

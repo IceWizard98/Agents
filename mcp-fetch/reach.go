@@ -192,7 +192,8 @@ func reachYouTube(ctx context.Context, yt Transcriber, u *url.URL) (string, erro
 func youtubeID(u *url.URL) string {
 	host := strings.ToLower(strings.TrimPrefix(u.Host, "www."))
 	if host == "youtu.be" {
-		return strings.Trim(u.Path, "/")
+		// youtu.be/<id>[/...]: take only the first path segment.
+		return strings.SplitN(strings.Trim(u.Path, "/"), "/", 2)[0]
 	}
 	if v := u.Query().Get("v"); v != "" {
 		return v
@@ -210,6 +211,13 @@ func youtubeID(u *url.URL) string {
 func reachSolver(ctx context.Context, s Solver, url string, timeoutMs int, cookies []SolveCookie) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("flaresolverr backend unavailable")
+	}
+	// Defense-in-depth: routeHost already constrains this path to x.com/reddit
+	// hosts, but validate before handing the URL to FlareSolverr (which fetches
+	// from inside the Coolify network) in case routing ever widens. See the
+	// ponytail note on validatePublicURL — egress policy is the real fix.
+	if err := validatePublicURL(url); err != nil {
+		return "", err
 	}
 	if timeoutMs <= 0 {
 		timeoutMs = defaultTimeoutMs
@@ -248,7 +256,15 @@ type githubClient struct {
 	client  *http.Client
 }
 
+// githubTimeout bounds each GitHub API/raw request. The shared http.Client has
+// no Timeout, so without this a stalled api.github.com would hang the goroutine
+// indefinitely — unlike the flaresolverr/jina paths which derive per-request
+// deadlines from the caller's timeout.
+const githubTimeout = 30 * time.Second
+
 func (g githubClient) get(ctx context.Context, url, accept string) ([]byte, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, githubTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build github request: %w", err)
@@ -263,7 +279,7 @@ func (g githubClient) get(ctx context.Context, url, accept string) ([]byte, int,
 		return nil, 0, fmt.Errorf("github request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("read github response: %w", err)
 	}
@@ -413,7 +429,7 @@ func (y youtubeTranscriber) Transcript(ctx context.Context, videoID string) (str
 		return "", fmt.Errorf("timedtext request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("read timedtext: %w", err)
 	}

@@ -100,7 +100,7 @@ func main() {
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "mark_email",
-		Description: "Mark an email as read or unread by UID.",
+		Description: "Mark an email as read or unread by UID. mailbox is REQUIRED and must be the mailbox the UID came from (UIDs are per-mailbox) — pass the same mailbox you searched or listed.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in MarkRequest) (*mcp.CallToolResult, struct{ Marked bool }, error) {
 		if err := MarkEmail(reader, in); err != nil {
 			return &mcp.CallToolResult{
@@ -112,7 +112,7 @@ func main() {
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "move_email",
-		Description: "Move an email to another mailbox by UID. To delete an email, move it to the Trash/Deleted Messages folder — use list_mailboxes to find its exact name.",
+		Description: "Move an email to another mailbox by UID. mailbox (source) is REQUIRED and must be the mailbox the UID came from (UIDs are per-mailbox) — pass the same mailbox you searched or listed, or the wrong message gets moved. To delete an email, move it to the Trash/Deleted Messages folder — use list_mailboxes to find its exact name.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in MoveRequest) (*mcp.CallToolResult, struct{ Moved bool }, error) {
 		if err := MoveEmail(reader, in); err != nil {
 			return &mcp.CallToolResult{

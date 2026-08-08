@@ -7,7 +7,8 @@ COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/mcp-fetch .
 
 # --- distroless runtime ---
-FROM gcr.io/distroless/static-debian12
+# :nonroot — this service writes nothing to disk, so drop root to shrink blast radius.
+FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/mcp-fetch /usr/local/bin/mcp-fetch
 ENV PORT=9002
 EXPOSE 9002

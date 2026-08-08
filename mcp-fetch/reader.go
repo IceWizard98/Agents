@@ -88,7 +88,7 @@ func (j jinaReader) Read(ctx context.Context, in ReadRequest) (ReadResult, error
 		return ReadResult{}, fmt.Errorf("jina request: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return ReadResult{}, fmt.Errorf("read jina response: %w", err)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -325,6 +326,22 @@ func TestHTTPClient_UpdateIssueStatus_EmptyID(t *testing.T) {
 	c := newHTTPClient("http://unused", "key")
 	if err := c.UpdateIssueStatus(context.Background(), "", "todo", "x"); err == nil {
 		t.Fatal("want error for empty issue id, must not call the API")
+	}
+}
+
+func TestHTTPClient_ResponseBodyIsCapped(t *testing.T) {
+	// Body larger than maxResponseBytes: LimitReader truncates it, so the (now
+	// incomplete) JSON fails to decode instead of being read fully into memory.
+	// Without the cap the whole valid array parses and no error is returned.
+	huge := `[{"id":"a1","name":"` + strings.Repeat("X", maxResponseBytes) + `"}]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, huge)
+	}))
+	defer srv.Close()
+
+	c := newHTTPClient(srv.URL, "key")
+	if _, err := c.ListAgents(context.Background(), "co1"); err == nil {
+		t.Fatal("want decode error: response body must be capped, not read in full")
 	}
 }
 

@@ -26,7 +26,7 @@ esac
 
 # Single-user mode: one Google account, no per-request OAuth session handshake.
 # USER_GOOGLE_EMAIL (optional) pins the default account for cached credentials.
-exec uvx workspace-mcp \
+exec uvx workspace-mcp==1.23.1 \
   --transport streamable-http \
   --single-user \
   --tools gmail calendar drive

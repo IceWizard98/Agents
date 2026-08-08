@@ -108,14 +108,28 @@ func (s *superMemory) authKey() string {
 	if s.keyFile == "" {
 		return ""
 	}
+	// Fast path: return the cached key under a brief lock.
+	s.mu.Lock()
+	cached := s.keyCache
+	s.mu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	// Slow path: read the file WITHOUT holding s.mu — readKeyFile retries and
+	// may sleep up to ~9s on the boot race; holding the lock there would
+	// serialize every concurrent request behind this one read.
+	key := readKeyFile(s.keyFile, 10)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.keyCache == "" {
-		if s.keyCache = readKeyFile(s.keyFile, 10); s.keyCache != "" {
-			slog.Info("supermemory api key loaded", "file", s.keyFile)
-		} else {
-			slog.Warn("supermemory api key file not readable; sending unauthenticated (localhost-only will 401)", "file", s.keyFile)
-		}
+	// Re-check: another goroutine may have populated the cache while we read.
+	if s.keyCache != "" {
+		return s.keyCache
+	}
+	if key != "" {
+		s.keyCache = key
+		slog.Info("supermemory api key loaded", "file", s.keyFile)
+	} else {
+		slog.Warn("supermemory api key file not readable; sending unauthenticated (localhost-only will 401)", "file", s.keyFile)
 	}
 	return s.keyCache
 }

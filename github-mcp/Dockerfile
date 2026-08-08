@@ -1,6 +1,7 @@
 # Official GitHub MCP server (self-hosted) exposed over streamable-HTTP to hermes.
 # The official image speaks stdio only: take the binary and bridge it with supergateway.
-FROM ghcr.io/github/github-mcp-server AS ghmcp
+# Pinned by digest: carries GITHUB_TOKEN with write toolsets — bump deliberately.
+FROM ghcr.io/github/github-mcp-server@sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520 AS ghmcp
 
 FROM node:22-bookworm-slim
 COPY --from=ghmcp /server/github-mcp-server /usr/local/bin/github-mcp-server

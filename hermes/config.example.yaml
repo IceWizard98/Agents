@@ -59,3 +59,6 @@ mcp_servers:
   # Persistent memory (self-hosted supermemory behind mcp-supermemory).
   supermemory:
     url: http://mcp-supermemory:9003/mcp
+  # GitHub (branch/commit/PR) — dynamic toolsets lato server per contenere i token.
+  github:
+    url: http://github-mcp:9400/mcp

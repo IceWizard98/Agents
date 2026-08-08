@@ -214,3 +214,95 @@ for (const [name, fn] of Object.entries(tests)) {
   pass++;
 }
 console.log(`\n${pass} passed`);
+
+// ---------------------------------------------------------------------------
+// Integration tests for the HTTP server (bugs 1-3). These spawn the real
+// server on an ephemeral port; bug 3 uses a fake `claude` on PATH that sleeps.
+import { test } from "node:test";
+import net from "node:net";
+import { spawn } from "node:child_process";
+import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(cond, ms) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) { if (cond()) return; await delay(50); }
+  throw new Error("waitFor timed out");
+}
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on("error", reject);
+    s.listen(0, () => { const p = s.address().port; s.close(() => resolve(p)); });
+  });
+}
+async function startServer(extraEnv = {}) {
+  const port = await freePort();
+  const proc = spawn(process.execPath, [SERVER], {
+    env: { ...process.env, PORT: String(port), ...extraEnv },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  await new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error("server did not start")), 5000);
+    proc.stdout.on("data", (d) => { if (String(d).includes("planner proxy on")) { clearTimeout(to); resolve(); } });
+    proc.on("exit", (c) => { clearTimeout(to); reject(new Error(`server exited ${c}`)); });
+  });
+  return { proc, base: `http://127.0.0.1:${port}` };
+}
+
+test("bug1: null JSON body returns 400 and does not crash the server", async () => {
+  const { proc, base } = await startServer();
+  try {
+    const r = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "null",
+    });
+    assert.equal(r.status, 400);
+    const h = await fetch(`${base}/health`);
+    assert.equal(h.status, 200);
+    assert.equal(proc.exitCode, null); // still running, did not crash
+  } finally { proc.kill("SIGKILL"); }
+});
+
+test("bug2: oversized request body returns 413", async () => {
+  const { proc, base } = await startServer();
+  try {
+    const big = "x".repeat(11 * 1024 * 1024);
+    const body = JSON.stringify({ messages: [{ role: "user", content: big }] });
+    const r = await fetch(`${base}/v1/chat/completions`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body,
+    });
+    assert.equal(r.status, 413);
+  } finally { proc.kill("SIGKILL"); }
+});
+
+test("bug3: client disconnect kills the claude child", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "fakeclaude-"));
+  const doneFile = join(dir, "done");
+  const startedFile = join(dir, "started");
+  // Fake claude: mark started, sleep, then mark done. If we're killed on
+  // disconnect, `done` is never written.
+  writeFileSync(
+    join(dir, "claude"),
+    `#!/bin/sh\ntouch "${startedFile}"\nsleep 3\ntouch "${doneFile}"\nprintf '{"result":"ok","is_error":false}'\n`,
+    { mode: 0o755 },
+  );
+  const { proc, base } = await startServer({ PATH: `${dir}:${process.env.PATH}` });
+  try {
+    const ac = new AbortController();
+    const p = fetch(`${base}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "sonnet", messages: [{ role: "user", content: "hi" }] }),
+      signal: ac.signal,
+    }).catch(() => {});
+    await waitFor(() => existsSync(startedFile), 5000);
+    ac.abort();
+    await p;
+    await delay(5000); // longer than the fake claude's 3s sleep
+    assert.equal(existsSync(doneFile), false, "child should have been killed on disconnect");
+  } finally { proc.kill("SIGKILL"); }
+});

@@ -62,6 +62,8 @@ services:
         condition: service_started
       mcp-icloud:
         condition: service_started
+      github-mcp:
+        condition: service_started
       mcp-fetch:
         condition: service_started
       mcp-supermemory:
@@ -106,7 +108,12 @@ services:
       - google_tokens:/data
     networks: [agents_net]
     ports:
-      - "9000:9000"   # OAuth redirect (…/oauth2callback) must reach the browser doing consent
+      # Host-local only: the OAuth callback is reached by the local browser during
+      # consent. Bound to 127.0.0.1 (not 0.0.0.0) so the unauthenticated --single-user
+      # Gmail/Drive/Calendar listener is not published on the host's external ifaces.
+      # In Coolify prod the callback routes via the assigned domain → the container on
+      # agents_net, not through this host port. Local dev uses http://localhost:9000.
+      - "127.0.0.1:9000:9000"
     restart: unless-stopped
 
   mcp-icloud:
@@ -118,17 +125,45 @@ services:
     networks: [agents_net]
     restart: unless-stopped
 
+  # github-mcp: official GitHub MCP server (branch/commit/PR via API), self-hosted.
+  # Dynamic toolsets: hermes vede ~2 meta-tool, carica il resto on-demand (schema
+  # quasi-zero per turno). GITHUB_TOOLSETS resta la whitelist di ciò che è abilitabile.
+  # Write attivo: repos+pull_requests includono anche merge/delete — per evitare
+  # merge accidentali usare branch protection o un PAT senza permesso di merge.
+  github-mcp:
+    build: ./github-mcp
+    environment:
+      - GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_TOOLSETS=repos,pull_requests
+      - GITHUB_DYNAMIC_TOOLSETS=1
+      - PORT=9400
+    networks: [agents_net]
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Box OOM-prone: cap the go binary + node supergateway (idle ~120MB).
+          memory: 256M
+
   # FlareSolverr: drives a real browser to pass Cloudflare/DDoS-Guard challenges
   # that block plain chromium/curl. Plain HTTP API on :8191 — hermes reaches it via
   # the mcp-fetch tool below, not directly. Internal only (no host port); bundles its
   # own browser. NOTE: official image is amd64 — on Apple-Silicon/colima it may not
   # start (the Coolify prod host is x86, so prod is fine).
   flaresolverr:
-    image: ghcr.io/flaresolverr/flaresolverr:latest
+    # Pinned by digest: a browser that fetches arbitrary web content — a floating
+    # `latest` would silently swap the engine on rebuild. Bump deliberately.
+    image: ghcr.io/flaresolverr/flaresolverr@sha256:139dfee1c6f89249c8d665d1333a42e8ec74ec0a86bc6bb1c8461e10d3a66a47
     environment:
       - LOG_LEVEL=${FLARESOLVERR_LOG_LEVEL:-info}
     networks: [agents_net]
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Bundles + drives Chromium (heaviest service after supermemory). Uncapped,
+          # a browser spike concurrent with a supermemory write peak OOM-kills the box.
+          memory: 1G
 
   # mcp-fetch: wraps FlareSolverr as an MCP `fetch_url` tool for hermes (streamable
   # HTTP on :9002). Custom Go server (same pattern as mcp-icloud).

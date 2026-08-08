@@ -2,7 +2,7 @@
 # Isolated container: access to the client's Jira only, nothing else.
 FROM python:3.12-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    pip install --no-cache-dir uv && \
+    pip install --no-cache-dir uv==0.12.3 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh

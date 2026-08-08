@@ -34,19 +34,18 @@ type SearchRequest struct {
 	Limit      int    `json:"limit,omitempty" jsonschema:"max results (1-50, default 10)"`
 }
 
-// MarkRequest is the mark_email tool payload. Read has no sensible default
-// (it's the whole point of the call) so it stays required; only Mailbox is
-// optional.
+// MarkRequest is the mark_email tool payload. Mailbox is required — UIDs are
+// per-mailbox, so it must name the mailbox the UID came from (not defaulted).
 type MarkRequest struct {
-	Mailbox string `json:"mailbox,omitempty" jsonschema:"mailbox name, default INBOX"`
+	Mailbox string `json:"mailbox" jsonschema:"REQUIRED mailbox the UID belongs to (UIDs are per-mailbox); pass the same mailbox you searched/listed"`
 	UID     uint32 `json:"uid" jsonschema:"message UID (from list_emails or search_emails)"`
 	Read    bool   `json:"read" jsonschema:"true = mark read, false = mark unread"`
 }
 
-// MoveRequest is the move_email tool payload. UID and To are required
-// (no sensible default); Mailbox (source) is optional.
+// MoveRequest is the move_email tool payload. Mailbox (source) is required —
+// UIDs are per-mailbox, so it must name the mailbox the UID came from.
 type MoveRequest struct {
-	Mailbox string `json:"mailbox,omitempty" jsonschema:"source mailbox, default INBOX"`
+	Mailbox string `json:"mailbox" jsonschema:"REQUIRED source mailbox the UID belongs to (UIDs are per-mailbox); pass the same mailbox you searched/listed"`
 	UID     uint32 `json:"uid" jsonschema:"message UID (from list_emails or search_emails)"`
 	To      string `json:"to" jsonschema:"destination mailbox (use list_mailboxes to see names; move to the Trash/Deleted folder to delete)"`
 }
@@ -114,19 +113,24 @@ func SearchEmails(s MailSearcher, req SearchRequest) ([]MailHeader, error) {
 	return s.Search(mailbox, q, limit)
 }
 
-// MarkEmail validates the request and sets/clears the read flag.
+// MarkEmail validates the request and sets/clears the read flag. mailbox is
+// REQUIRED: IMAP UIDs are per-mailbox, so defaulting to INBOX would act on a
+// different message than the one the UID was retrieved from.
 func MarkEmail(f MailFlagger, req MarkRequest) error {
 	if req.UID == 0 {
 		return fmt.Errorf("uid is required")
 	}
 	mailbox := strings.TrimSpace(req.Mailbox)
 	if mailbox == "" {
-		mailbox = defaultMailbox
+		return fmt.Errorf("mailbox is required")
 	}
 	return f.Mark(mailbox, req.UID, req.Read)
 }
 
 // MoveEmail validates the request and moves a message to another mailbox.
+// mailbox (source) is REQUIRED: IMAP UIDs are per-mailbox, so defaulting to
+// INBOX would move a different message — moving the wrong one to Trash is
+// silent data loss.
 func MoveEmail(m MailMover, req MoveRequest) error {
 	if req.UID == 0 {
 		return fmt.Errorf("uid is required")
@@ -137,7 +141,7 @@ func MoveEmail(m MailMover, req MoveRequest) error {
 	}
 	mailbox := strings.TrimSpace(req.Mailbox)
 	if mailbox == "" {
-		mailbox = defaultMailbox
+		return fmt.Errorf("mailbox is required")
 	}
 	return m.Move(mailbox, req.UID, to)
 }

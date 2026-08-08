@@ -46,6 +46,11 @@ func (c *httpAgentIssueClient) withHostOverride(host string) *httpAgentIssueClie
 // internal error dump from paperclip.
 const maxErrorBodyEcho = 300
 
+// maxResponseBytes bounds how much of a response body we read into memory, so a
+// huge or runaway upstream reply can't OOM the process. ponytail: fixed cap;
+// raise if a legit response gets clipped.
+const maxResponseBytes = 512 << 10
+
 // do performs one request against the Paperclip API. body/out are JSON;
 // either may be nil (no request body / no response body to decode). ctx
 // propagates the MCP tool call's cancellation/deadline to the outbound
@@ -78,7 +83,7 @@ func (c *httpAgentIssueClient) do(ctx context.Context, method, path string, body
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return fmt.Errorf("read response body for %s %s: %w", method, path, err)
 	}

@@ -125,11 +125,23 @@ func (f *fakeFlagger) Mark(mailbox string, uid uint32, read bool) error {
 
 func TestMarkEmail_OK(t *testing.T) {
 	f := &fakeFlagger{}
-	if err := MarkEmail(f, MarkRequest{UID: 7, Read: true}); err != nil {
+	if err := MarkEmail(f, MarkRequest{Mailbox: "Sent", UID: 7, Read: true}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if f.gotBox != "INBOX" || f.gotUID != 7 || !f.gotRead {
+	if f.gotBox != "Sent" || f.gotUID != 7 || !f.gotRead {
 		t.Fatalf("wrong args: box=%s uid=%d read=%v", f.gotBox, f.gotUID, f.gotRead)
+	}
+}
+
+func TestMarkEmail_RequiresMailbox(t *testing.T) {
+	f := &fakeFlagger{}
+	// IMAP UIDs are per-mailbox; defaulting an omitted mailbox to INBOX would
+	// mark a DIFFERENT message than the one the UID came from.
+	if err := MarkEmail(f, MarkRequest{UID: 7, Read: true}); err == nil {
+		t.Fatal("expected error for omitted mailbox")
+	}
+	if f.wasCalled {
+		t.Fatal("flagger must not be called without a mailbox")
 	}
 }
 
@@ -168,11 +180,24 @@ func (f *fakeMover) Move(mailbox string, uid uint32, to string) error {
 
 func TestMoveEmail_OK(t *testing.T) {
 	f := &fakeMover{}
-	if err := MoveEmail(f, MoveRequest{UID: 3, To: "Archive"}); err != nil {
+	if err := MoveEmail(f, MoveRequest{Mailbox: "Sent", UID: 3, To: "Archive"}); err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if f.gotBox != "INBOX" || f.gotUID != 3 || f.gotTo != "Archive" {
+	if f.gotBox != "Sent" || f.gotUID != 3 || f.gotTo != "Archive" {
 		t.Fatalf("wrong args: box=%s uid=%d to=%s", f.gotBox, f.gotUID, f.gotTo)
+	}
+}
+
+func TestMoveEmail_RequiresMailbox(t *testing.T) {
+	f := &fakeMover{}
+	// IMAP UIDs are per-mailbox; defaulting an omitted source mailbox to INBOX
+	// would move a DIFFERENT message (e.g. INBOX's UID N instead of Sent's) —
+	// moving it to Trash is silent data loss.
+	if err := MoveEmail(f, MoveRequest{UID: 3, To: "Archive"}); err == nil {
+		t.Fatal("expected error for omitted source mailbox")
+	}
+	if f.wasCalled {
+		t.Fatal("mover must not be called without a source mailbox")
 	}
 }
 
@@ -188,7 +213,7 @@ func TestMoveEmail_RejectsZeroUID(t *testing.T) {
 
 func TestMoveEmail_RequiresDestination(t *testing.T) {
 	f := &fakeMover{}
-	if err := MoveEmail(f, MoveRequest{UID: 1, To: "  "}); err == nil {
+	if err := MoveEmail(f, MoveRequest{Mailbox: "INBOX", UID: 1, To: "  "}); err == nil {
 		t.Fatal("expected error for empty destination")
 	}
 	if f.wasCalled {

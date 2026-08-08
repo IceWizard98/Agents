@@ -32,6 +32,11 @@ hermes config set mcp_servers.fetch.url http://mcp-fetch:9002/mcp >/dev/null 2>&
 hermes config set mcp_servers.supermemory.url http://mcp-supermemory:9003/mcp >/dev/null 2>&1 || \
   echo "[cont-init] warning: could not set mcp_servers.supermemory.url"
 
+# Register the github-mcp tool (branch/commit/PR) on every boot, idempotent
+# (same reason as fetch above — live config.yaml is only seeded on first boot).
+hermes config set mcp_servers.github.url http://github-mcp:9400/mcp >/dev/null 2>&1 || \
+  echo "[cont-init] warning: could not set mcp_servers.github.url"
+
 # Model is driven by the HERMES_MODEL env var. On Coolify: change the env var and
 # redeploy — this re-applies it on the next boot. Provider stays as in config.
 if [ -n "${HERMES_MODEL:-}" ]; then
