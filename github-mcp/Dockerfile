@@ -5,7 +5,13 @@ FROM ghcr.io/github/github-mcp-server@sha256:d5a18c04b92714c309eb46a2305087e91a4
 
 FROM node:22-bookworm-slim
 COPY --from=ghmcp /server/github-mcp-server /usr/local/bin/github-mcp-server
-RUN npm install -g supergateway@3.4.3 && useradd -m -u 1001 app
+# ca-certificates: the github-mcp-server is a static Go binary that reads the SYSTEM
+# CA store (/etc/ssl/certs) to verify api.github.com's TLS cert. node:22-bookworm-slim
+# ships without it (npm uses Node's bundled CAs, so the build still works) — without
+# this every GitHub call fails "x509: certificate signed by unknown authority".
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    npm install -g supergateway@3.4.3 && useradd -m -u 1001 app
 USER app
 ENV PORT=9400
 EXPOSE 9400
