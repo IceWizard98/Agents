@@ -1,6 +1,6 @@
 // mcp-icloud — MCP server (streamable HTTP) for iCloud mail on :9001.
-// Tools: send_email (SMTP); list_emails, read_email, search_emails,
-// mark_email, move_email, list_mailboxes (IMAP).
+// Tools: send_email, forward_email (SMTP); list_emails, read_email,
+// search_emails, mark_email, move_email, list_mailboxes (IMAP).
 package main
 
 import (
@@ -121,6 +121,18 @@ func main() {
 			}, struct{ Moved bool }{false}, nil
 		}
 		return nil, struct{ Moved bool }{true}, nil
+	})
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "forward_email",
+		Description: "Forward an email to another recipient by UID. mailbox (source) is REQUIRED and must be the mailbox the UID came from (UIDs are per-mailbox) — pass the same mailbox you searched or listed. Optional note is prepended above the quoted original. Subject gets a Fwd: prefix.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ForwardRequest) (*mcp.CallToolResult, struct{ Forwarded bool }, error) {
+		if err := ForwardEmail(reader, mailer, from, in); err != nil {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+			}, struct{ Forwarded bool }{false}, nil
+		}
+		return nil, struct{ Forwarded bool }{true}, nil
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "list_mailboxes",
