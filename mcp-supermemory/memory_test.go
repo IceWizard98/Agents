@@ -208,6 +208,8 @@ func TestDeleteMemory_RejectsPathTraversal(t *testing.T) {
 		"doc with space",
 		"doc\u0000id",
 		"/v3/documents/other",
+		".",
+		"..",
 	}
 	for _, id := range cases {
 		fd := &fakeDeleter{res: []byte(`{}`)}

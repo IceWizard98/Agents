@@ -295,6 +295,12 @@ func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResul
 	if id == "" {
 		return DeleteResult{}, fmt.Errorf("document_id is required")
 	}
+	// Reject the dot segments whose decoded forms collide with path traversal.
+	// "." and ".." as a whole id would resolve to the collection / its parent
+	// via the path normaliser, so treat them as invalid instead of a resource.
+	if id == "." || id == ".." {
+		return DeleteResult{}, fmt.Errorf("invalid document_id: %q is not a document identifier", id)
+	}
 	for _, r := range id {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
 			r == '_' || r == '-' || r == '.') {
