@@ -176,7 +176,8 @@ type GetAttachmentsRequest struct {
 
 // GetAttachments validates the request and reads all attachments of one
 // message by UID. A message with no attachments returns an empty slice, not
-// an error.
+// an error. The result is normalized to a non-nil empty slice so the JSON
+// response is always an array (never null), matching the documented contract.
 func GetAttachments(r AttachmentReader, req GetAttachmentsRequest) ([]Attachment, error) {
 	if req.UID == 0 {
 		return nil, fmt.Errorf("uid is required")
@@ -185,5 +186,12 @@ func GetAttachments(r AttachmentReader, req GetAttachmentsRequest) ([]Attachment
 	if mailbox == "" {
 		mailbox = defaultMailbox
 	}
-	return r.ReadAttachments(mailbox, req.UID)
+	atts, err := r.ReadAttachments(mailbox, req.UID)
+	if err != nil {
+		return nil, err
+	}
+	if atts == nil {
+		return []Attachment{}, nil
+	}
+	return atts, nil
 }

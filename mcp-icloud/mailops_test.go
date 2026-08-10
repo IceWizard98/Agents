@@ -281,13 +281,17 @@ func TestGetAttachments_RejectsZeroUID(t *testing.T) {
 }
 
 func TestGetAttachments_EmptyListIsNotError(t *testing.T) {
-	f := &fakeAttachmentReader{} // no attachments
+	f := &fakeAttachmentReader{} // no attachments, returns nil slice
 	atts, err := GetAttachments(f, GetAttachmentsRequest{UID: 9})
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if len(atts) != 0 {
 		t.Fatalf("expected empty result, got %+v", atts)
+	}
+	// Must be non-nil so the JSON response is an empty array, never null.
+	if atts == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
 	}
 }
 
