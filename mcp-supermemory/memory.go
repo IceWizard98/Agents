@@ -28,6 +28,12 @@ type Poster interface {
 	Post(ctx context.Context, path string, payload any) ([]byte, error)
 }
 
+// Deleter is the hexagonal port for removing a document from supermemory.
+// Delete sends an HTTP DELETE to the given path (no JSON body).
+type Deleter interface {
+	Delete(ctx context.Context, path string) ([]byte, error)
+}
+
 // superMemory is the real adapter against a self-hosted supermemory server
 // (REST on :6767). Auth is optional — the local server runs unauthenticated for
 // localhost, but cross-container calls need its api-key. keyEnv (an explicit
@@ -51,10 +57,20 @@ func (s *superMemory) Post(ctx context.Context, path string, payload any) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("marshal supermemory request: %w", err)
 	}
-	// One retry: on 401 the cached key may be stale (server regenerated it after a
-	// data-volume reset) — refresh from the key file and try once more.
+	return s.send(ctx, http.MethodPost, path, body)
+}
+
+// Delete sends an HTTP DELETE to path (no body) for removing a document.
+func (s *superMemory) Delete(ctx context.Context, path string) ([]byte, error) {
+	return s.send(ctx, http.MethodDelete, path, nil)
+}
+
+// send issues one request with the given HTTP method and body, retrying once
+// on 401 when the cached key may be stale (server regenerated it after a
+// data-volume reset) — refresh from the key file and try once more.
+func (s *superMemory) send(ctx context.Context, method, path string, body []byte) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
-		data, status, err := s.do(ctx, path, body)
+		data, status, err := s.do(ctx, method, path, body)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +86,7 @@ func (s *superMemory) Post(ctx context.Context, path string, payload any) ([]byt
 }
 
 // do sends one request and returns (body, status, transport-error).
-func (s *superMemory) do(ctx context.Context, path string, body []byte) ([]byte, int, error) {
+func (s *superMemory) do(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
 	// Bound the request so a stalled backend can't hang the tool call forever,
 	// while still composing with the inbound MCP ctx (cancel wins whichever first).
 	if s.timeout > 0 {
@@ -78,7 +94,7 @@ func (s *superMemory) do(ctx context.Context, path string, body []byte) ([]byte,
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, fmt.Errorf("build supermemory request: %w", err)
 	}
@@ -249,4 +265,45 @@ func firstNonEmpty(a, b string) string {
 		return s
 	}
 	return strings.TrimSpace(b)
+}
+
+// DeleteRequest is the delete_memory tool payload.
+type DeleteRequest struct {
+	// DocumentID is the document id (or customId) to remove. Required. It
+	// becomes a literal URL path segment ("/v3/documents/{id}"), so DeleteMemory
+	// validates it is a single safe segment before any HTTP call.
+	DocumentID string `json:"document_id" jsonschema:"document id or customId to delete (from add_memory or search_memory)"`
+}
+
+// DeleteResult carries supermemory's raw delete response back to the model.
+type DeleteResult struct {
+	Response string `json:"response"`
+}
+
+// DeleteMemory validates input and deletes one document via
+// DELETE /v3/documents/{id}. The endpoint accepts the document id OR a
+// customId (see supermemory document-operations docs). Deletes are permanent —
+// there is no undo.
+//
+// The id is used as a literal path segment. Injecting "/", "../", etc. would
+// change the route or escape the collection, so we reject ids that are not a
+// single safe alphanumeric(-_.) segment rather than URL-escaping: an escaped
+// "%2F" may be normalised back by the server's reverse proxy, silently
+// deleting a different document than the one requested.
+func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResult, error) {
+	id := strings.TrimSpace(in.DocumentID)
+	if id == "" {
+		return DeleteResult{}, fmt.Errorf("document_id is required")
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			r == '_' || r == '-' || r == '.') {
+			return DeleteResult{}, fmt.Errorf("invalid document_id: only letters, digits, '_', '-' and '.' are allowed")
+		}
+	}
+	data, err := d.Delete(ctx, "/v3/documents/"+id)
+	if err != nil {
+		return DeleteResult{}, fmt.Errorf("delete memory: %w", err)
+	}
+	return DeleteResult{Response: string(data)}, nil
 }

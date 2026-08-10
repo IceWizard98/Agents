@@ -1,6 +1,7 @@
 // mcp-supermemory — MCP server (streamable HTTP) exposing a self-hosted
 // supermemory server (REST on :6767) as memory tools for hermes.
-// Tools: add_memory (POST /v3/documents), search_memory (POST /v4/search).
+// Tools: add_memory (POST /v3/documents), search_memory (POST /v4/search),
+// delete_memory (DELETE /v3/documents/{id}).
 // Default port :9003.
 package main
 
@@ -53,6 +54,18 @@ func main() {
 		out, err := SearchMemory(ctx, store, defaultTag, in)
 		if err != nil {
 			return errResult(err), SearchResult{}, nil
+		}
+		return nil, out, nil
+	})
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "delete_memory",
+		Description: "Permanently delete a memory/document from supermemory by its document id or " +
+			"customId (as returned by add_memory or search_memory). Deletion is irreversible — there is no undo.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in DeleteRequest) (*mcp.CallToolResult, DeleteResult, error) {
+		out, err := DeleteMemory(ctx, store, in)
+		if err != nil {
+			return errResult(err), DeleteResult{}, nil
 		}
 		return nil, out, nil
 	})
