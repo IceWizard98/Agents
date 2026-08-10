@@ -153,6 +153,25 @@ func main() {
 			Mailboxes []string `json:"mailboxes"`
 		}{Mailboxes: boxes}, nil
 	})
+	mcp.AddTool(srv, &mcp.Tool{
+		Name:        "get_attachments",
+		Description: "Get attachments from a specific email by UID (default mailbox INBOX). Returns filename, content_type, size, and base64-encoded data for each attachment. Attachments larger than 10MB are returned with skipped=true and reason=\"too large\" instead of data, to avoid exploding the response. A message with no attachments returns an empty list, not an error.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GetAttachmentsRequest) (*mcp.CallToolResult, struct {
+		Attachments []Attachment `json:"attachments"`
+	}, error) {
+		atts, err := GetAttachments(reader, in)
+		if err != nil {
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+			}, struct {
+				Attachments []Attachment `json:"attachments"`
+			}{}, nil
+		}
+		return nil, struct {
+			Attachments []Attachment `json:"attachments"`
+		}{Attachments: atts}, nil
+	})
 
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 	mux := http.NewServeMux()
