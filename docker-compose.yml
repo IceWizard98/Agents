@@ -222,7 +222,7 @@ services:
           memory: 3G
 
   # mcp-supermemory: wraps the supermemory REST API as MCP tools (add_memory,
-  # search_memory) for hermes (streamable HTTP on :9003). Custom Go server (same
+  # search_memory, delete_memory) for hermes (streamable HTTP on :9003). Custom Go server (same
   # pattern as mcp-fetch). The self-hosted binary is REST-only; this is the bridge.
   mcp-supermemory:
     build: ./mcp-supermemory

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -270,8 +271,8 @@ func firstNonEmpty(a, b string) string {
 // DeleteRequest is the delete_memory tool payload.
 type DeleteRequest struct {
 	// DocumentID is the document id (or customId) to remove. Required. It
-	// becomes a literal URL path segment ("/v3/documents/{id}"), so DeleteMemory
-	// validates it is a single safe segment before any HTTP call.
+	// becomes a URL path segment ("/v3/documents/{id}"), so DeleteMemory rejects
+	// separators and escapes the rest before any HTTP call.
 	DocumentID string `json:"document_id" jsonschema:"document id or customId to delete (from add_memory or search_memory)"`
 }
 
@@ -285,11 +286,13 @@ type DeleteResult struct {
 // customId (see supermemory document-operations docs). Deletes are permanent —
 // there is no undo.
 //
-// The id is used as a literal path segment. Injecting "/", "../", etc. would
-// change the route or escape the collection, so we reject ids that are not a
-// single safe alphanumeric(-_.) segment rather than URL-escaping: an escaped
-// "%2F" may be normalised back by the server's reverse proxy, silently
-// deleting a different document than the one requested.
+// The id is used as a literal path segment, so anything that could change the
+// route is rejected outright: "/" and "\" (segment separators), "%" (a
+// pre-encoded "%2F" may be normalised back by the server's reverse proxy,
+// silently deleting a different document) and control characters. Everything
+// else is URL-escaped rather than rejected — add_memory accepts any custom_id
+// (":", "@", spaces, non-ASCII), and banning those here would make such
+// memories undeletable.
 func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResult, error) {
 	id := strings.TrimSpace(in.DocumentID)
 	if id == "" {
@@ -302,12 +305,13 @@ func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResul
 		return DeleteResult{}, fmt.Errorf("invalid document_id: %q is not a document identifier", id)
 	}
 	for _, r := range id {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
-			r == '_' || r == '-' || r == '.') {
-			return DeleteResult{}, fmt.Errorf("invalid document_id: only letters, digits, '_', '-' and '.' are allowed")
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return DeleteResult{}, fmt.Errorf("invalid document_id: %q may not contain '/', '\\', '%%' or control characters", id)
 		}
 	}
-	data, err := d.Delete(ctx, "/v3/documents/"+id)
+	// Deletes are irreversible and the backend keeps no undo, so leave a trail.
+	slog.Info("delete_memory", "document_id", id)
+	data, err := d.Delete(ctx, "/v3/documents/"+url.PathEscape(id))
 	if err != nil {
 		return DeleteResult{}, fmt.Errorf("delete memory: %w", err)
 	}

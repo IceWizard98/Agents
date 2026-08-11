@@ -205,7 +205,7 @@ func TestDeleteMemory_RejectsPathTraversal(t *testing.T) {
 		"../../etc/passwd",
 		"a/b/c",
 		"..%2F..%2Fetc",
-		"doc with space",
+		"doc\\id",
 		"doc\u0000id",
 		"/v3/documents/other",
 		".",
@@ -218,6 +218,29 @@ func TestDeleteMemory_RejectsPathTraversal(t *testing.T) {
 		}
 		if fd.called {
 			t.Errorf("deleter must not be called for document_id %q", id)
+		}
+	}
+}
+
+// custom_id is free-form on the add_memory side, so delete must cope with the
+// characters add accepts (":", "@", "#", spaces) instead of rejecting them —
+// otherwise those memories would be undeletable. They are escaped, not banned.
+func TestDeleteMemory_EscapesCustomIDCharacters(t *testing.T) {
+	cases := map[string]string{
+		"conv:42":        "/v3/documents/conv:42",
+		"doc with space": "/v3/documents/doc%20with%20space",
+		"user@host":      "/v3/documents/user@host",
+		"thread#1":       "/v3/documents/thread%231",
+		"città":          "/v3/documents/citt%C3%A0",
+	}
+	for id, wantPath := range cases {
+		fd := &fakeDeleter{res: []byte(`{}`)}
+		if _, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: id}); err != nil {
+			t.Errorf("document_id %q: unexpected error: %v", id, err)
+			continue
+		}
+		if fd.gotPath != wantPath {
+			t.Errorf("document_id %q: path = %q, want %q", id, fd.gotPath, wantPath)
 		}
 	}
 }
