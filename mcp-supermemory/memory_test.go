@@ -232,6 +232,7 @@ func TestDeleteMemory_EscapesCustomIDCharacters(t *testing.T) {
 		"user@host":      "/v3/documents/user@host",
 		"thread#1":       "/v3/documents/thread%231",
 		"città":          "/v3/documents/citt%C3%A0",
+		"release+notes":  "/v3/documents/release%2Bnotes",
 	}
 	for id, wantPath := range cases {
 		fd := &fakeDeleter{res: []byte(`{}`)}

@@ -311,7 +311,10 @@ func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResul
 	}
 	// Deletes are irreversible and the backend keeps no undo, so leave a trail.
 	slog.Info("delete_memory", "document_id", id)
-	data, err := d.Delete(ctx, "/v3/documents/"+url.PathEscape(id))
+	// PathEscape leaves "+" literal; a backend that form-decodes the segment
+	// would read it as a space and delete a different document. Escape it too.
+	seg := strings.ReplaceAll(url.PathEscape(id), "+", "%2B")
+	data, err := d.Delete(ctx, "/v3/documents/"+seg)
 	if err != nil {
 		return DeleteResult{}, fmt.Errorf("delete memory: %w", err)
 	}
