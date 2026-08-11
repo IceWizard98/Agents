@@ -11,6 +11,10 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-message"
+	// Registers decoders for the legacy charsets (iso-8859-*, windows-*, …).
+	// Without it go-message rejects every non-UTF-8 mail as an unknown charset.
+	_ "github.com/emersion/go-message/charset"
 	"github.com/emersion/go-message/mail"
 )
 
@@ -169,7 +173,9 @@ func (r imapReader) Read(mailbox string, uid uint32) (MailMessage, error) {
 
 	uidSet := imap.UIDSet{}
 	uidSet.AddNum(imap.UID(uid))
-	section := &imap.FetchItemBodySection{}
+	// Peek: fetching content must not mark the message \Seen — read state is
+	// domain-meaningful here (mark_email owns it).
+	section := &imap.FetchItemBodySection{Peek: true}
 	opts := &imap.FetchOptions{
 		UID:         true,
 		Envelope:    true,
@@ -354,7 +360,7 @@ func extractText(raw []byte) string {
 		return ""
 	}
 	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
-	if err != nil {
+	if err != nil && !message.IsUnknownCharset(err) {
 		return string(raw)
 	}
 	var b strings.Builder
@@ -363,7 +369,7 @@ func extractText(raw []byte) string {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
+		if err != nil && !message.IsUnknownCharset(err) {
 			break
 		}
 		if _, ok := p.Header.(*mail.InlineHeader); ok {
@@ -393,7 +399,9 @@ func (r imapReader) ReadAttachments(mailbox string, uid uint32) ([]Attachment, e
 
 	uidSet := imap.UIDSet{}
 	uidSet.AddNum(imap.UID(uid))
-	section := &imap.FetchItemBodySection{}
+	// Peek: fetching content must not mark the message \Seen — read state is
+	// domain-meaningful here (mark_email owns it).
+	section := &imap.FetchItemBodySection{Peek: true}
 	opts := &imap.FetchOptions{
 		UID:         true,
 		BodySection: []*imap.FetchItemBodySection{section},
@@ -419,7 +427,10 @@ func (r imapReader) ReadAttachments(mailbox string, uid uint32) ([]Attachment, e
 // behaviour so a garbled message doesn't fail the whole call.
 func extractAttachments(raw []byte) []Attachment {
 	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
-	if err != nil {
+	// go-message reports an unregistered charset as an error but still returns a
+	// usable reader/part. Treating that as fatal made every legacy-charset mail
+	// (iso-8859-1 & co) report zero attachments.
+	if err != nil && !message.IsUnknownCharset(err) {
 		return nil
 	}
 	var out []Attachment
@@ -428,28 +439,55 @@ func extractAttachments(raw []byte) []Attachment {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
-			// Stop at the first malformed part rather than looping forever;
-			// whatever was already collected is still returned.
+		if err != nil && !message.IsUnknownCharset(err) {
+			// Stop at the first malformed part rather than looping forever, but
+			// say so: a shorter list must not look like a complete one.
+			out = append(out, Attachment{
+				Skipped: true,
+				Reason:  fmt.Sprintf("message truncated: %v", err),
+			})
 			break
 		}
 		ah, ok := p.Header.(*mail.AttachmentHeader)
 		if !ok {
 			continue
 		}
+		filename, nameErr := ah.Filename()
+		contentType := attachmentContentType(ah)
 		data, readErr := io.ReadAll(p.Body)
 		if readErr != nil {
-			// Skip a part we can't fully read rather than aborting the rest.
+			// Report the part we could not decode instead of dropping it — a
+			// missing entry is indistinguishable from "there was no attachment".
+			out = append(out, Attachment{
+				Filename:    sanitizeFilename(filename),
+				ContentType: contentType,
+				Skipped:     true,
+				Reason:      fmt.Sprintf("read failed: %v", readErr),
+			})
 			continue
 		}
-		filename, _ := ah.Filename()
-		contentType, _, ctErr := ah.ContentType()
-		if ctErr != nil || contentType == "" {
-			contentType = "application/octet-stream"
+		att := buildAttachment(sanitizeFilename(filename), contentType, data)
+		if nameErr != nil {
+			att.Reason = "filename unparseable"
 		}
-		out = append(out, buildAttachment(sanitizeFilename(filename), contentType, data))
+		out = append(out, att)
 	}
 	return out
+}
+
+// attachmentContentType reports the part's declared type. go-message returns
+// RFC 2045's text/plain default when the header is absent, which is misleading
+// for a Content-Disposition: attachment part — an undeclared attachment is a
+// binary blob, not body text.
+func attachmentContentType(ah *mail.AttachmentHeader) string {
+	if ah.Get("Content-Type") == "" {
+		return "application/octet-stream"
+	}
+	contentType, _, err := ah.ContentType()
+	if err != nil || contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
 }
 
 // buildAttachment turns a decoded MIME part into an Attachment, applying the
@@ -476,13 +514,19 @@ func buildAttachment(filename, contentType string, data []byte) Attachment {
 // untrusted source for this string — a crafted "../../etc/passwd" filename
 // must not survive.
 func sanitizeFilename(name string) string {
-	name = strings.ReplaceAll(name, "/", "")
-	name = strings.ReplaceAll(name, "\\", "")
-	name = strings.ReplaceAll(name, "..", "")
-	return strings.Map(func(r rune) rune {
-		if r < 32 {
+	// Control characters go first: stripping them last would let ".\x00."
+	// survive the ".." pass and then collapse back into "..".
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || r == 0x7f {
 			return -1
 		}
 		return r
 	}, name)
+	name = strings.ReplaceAll(name, "/", "")
+	name = strings.ReplaceAll(name, "\\", "")
+	// Loop to a fixed point: one pass turns "..." into "." but "...." into "..".
+	for strings.Contains(name, "..") {
+		name = strings.ReplaceAll(name, "..", "")
+	}
+	return name
 }

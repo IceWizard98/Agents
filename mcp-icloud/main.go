@@ -1,6 +1,6 @@
 // mcp-icloud — MCP server (streamable HTTP) for iCloud mail on :9001.
 // Tools: send_email, forward_email (SMTP); list_emails, read_email,
-// search_emails, mark_email, move_email, list_mailboxes (IMAP).
+// search_emails, mark_email, move_email, list_mailboxes, get_attachments (IMAP).
 package main
 
 import (
@@ -155,7 +155,7 @@ func main() {
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "get_attachments",
-		Description: "Get attachments from a specific email by UID (default mailbox INBOX). Returns filename, content_type, size, and base64-encoded data for each attachment. Attachments larger than 10MB are returned with skipped=true and reason=\"too large\" instead of data, to avoid exploding the response. A message with no attachments returns an empty list, not an error.",
+		Description: "Get attachments from a specific email by UID (default mailbox INBOX). Returns filename, content_type, size, and base64-encoded data for each attachment. Any single attachment larger than 10MB is returned with skipped=true and reason=\"too large\" instead of data (the cap is per attachment, not per response); a part that cannot be decoded comes back skipped with the reason. A message with no attachments returns an empty list, not an error.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in GetAttachmentsRequest) (*mcp.CallToolResult, struct {
 		Attachments []Attachment `json:"attachments"`
 	}, error) {

@@ -66,11 +66,9 @@ func TestExtractAttachments_ParsesAttachmentPart(t *testing.T) {
 }
 
 func TestExtractAttachments_MissingContentTypeDefaults(t *testing.T) {
-	// Per RFC 2045 a MIME part without an explicit Content-Type defaults to
-	// text/plain. The fallback to application/octet-stream in
-	// extractAttachments only triggers when ContentType() returns an error or
-	// an empty string; here we only assert the part is still parsed and a
-	// (non-empty) content type is reported.
+	// A part with no Content-Type header at all: RFC 2045 says text/plain, but
+	// Content-Disposition: attachment already says "file, not body text", so an
+	// undeclared attachment is reported as application/octet-stream.
 	raw := buildMIME("BOUND3",
 		"Content-Disposition: attachment; filename=\"blob.bin\"\r\n\r\n"+
 			"binarydata\r\n",
@@ -79,11 +77,89 @@ func TestExtractAttachments_MissingContentTypeDefaults(t *testing.T) {
 	if len(atts) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(atts))
 	}
-	if atts[0].ContentType == "" {
-		t.Fatalf("expected a non-empty content_type, got empty")
+	if atts[0].ContentType != "application/octet-stream" {
+		t.Fatalf("content_type = %q, want application/octet-stream", atts[0].ContentType)
 	}
 	if atts[0].Filename != "blob.bin" {
 		t.Fatalf("filename = %q, want blob.bin", atts[0].Filename)
+	}
+}
+
+// go-message has no charset decoders registered for legacy charsets unless the
+// charset package is imported, and it reports that as an error alongside a
+// perfectly usable part. Treating it as fatal made every iso-8859-1 mail look
+// like it had no attachments.
+func TestExtractAttachments_UnknownCharsetBodyStillYieldsAttachment(t *testing.T) {
+	raw := buildMIME("BOUND6",
+		"Content-Type: text/plain; charset=iso-8859-1\r\n\r\nCiao pero\xf2.\r\n",
+		"Content-Type: application/pdf\r\n"+
+			"Content-Disposition: attachment; filename=\"a.pdf\"\r\n\r\n"+
+			"pdfbytes\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment past the iso-8859-1 body part, got %d: %+v", len(atts), atts)
+	}
+	if atts[0].Filename != "a.pdf" {
+		t.Fatalf("filename = %q, want a.pdf", atts[0].Filename)
+	}
+}
+
+func TestExtractAttachments_UnknownCharsetOnAttachmentPart(t *testing.T) {
+	raw := buildMIME("BOUND7",
+		"Content-Type: text/plain\r\n\r\nBody.\r\n",
+		"Content-Type: text/csv; charset=windows-1252\r\n"+
+			"Content-Disposition: attachment; filename=\"rows.csv\"\r\n\r\n"+
+			"a;b\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d: %+v", len(atts), atts)
+	}
+	if atts[0].Filename != "rows.csv" {
+		t.Fatalf("filename = %q, want rows.csv", atts[0].Filename)
+	}
+}
+
+func TestExtractAttachments_AttachmentWithoutFilename(t *testing.T) {
+	raw := buildMIME("BOUND8",
+		"Content-Type: application/pdf\r\n"+
+			"Content-Disposition: attachment\r\n\r\n"+
+			"pdfbytes\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d: %+v", len(atts), atts)
+	}
+	if atts[0].Filename != "" {
+		t.Fatalf("filename = %q, want empty", atts[0].Filename)
+	}
+	if atts[0].Data == "" {
+		t.Fatalf("expected data for a nameless attachment")
+	}
+}
+
+// An undecodable body must be reported, not dropped: a silently missing
+// attachment is indistinguishable from an email that never had one.
+func TestExtractAttachments_UnreadablePartIsReportedAsSkipped(t *testing.T) {
+	raw := buildMIME("BOUND9",
+		"Content-Type: application/pdf\r\n"+
+			"Content-Transfer-Encoding: base64\r\n"+
+			"Content-Disposition: attachment; filename=\"broken.pdf\"\r\n\r\n"+
+			"!!!!not base64!!!!\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 {
+		t.Fatalf("expected the unreadable part to be reported, got %d: %+v", len(atts), atts)
+	}
+	if !atts[0].Skipped {
+		t.Fatalf("expected skipped=true for an unreadable part: %+v", atts[0])
+	}
+	if atts[0].Reason == "" {
+		t.Fatalf("expected a reason for the skipped part")
+	}
+	if atts[0].Data != "" {
+		t.Fatalf("expected no data for a skipped part")
 	}
 }
 
@@ -188,6 +264,16 @@ func TestSanitizeFilename_StripsControlCharacters(t *testing.T) {
 	got := sanitizeFilename("bad\x00name\x1f.txt")
 	if strings.ContainsAny(got, "\x00\x1f") {
 		t.Fatalf("sanitizeFilename left control characters: %q", got)
+	}
+}
+
+// Control characters must go before the ".." pass, otherwise ".\x00." loses the
+// NUL after the check and reconstitutes the traversal sequence.
+func TestSanitizeFilename_InterleavedControlCharsCannotReformTraversal(t *testing.T) {
+	for _, in := range []string{".\x00.", "..\x01/etc", ".\x1f./.\x1f./passwd"} {
+		if got := sanitizeFilename(in); strings.Contains(got, "..") {
+			t.Errorf("sanitizeFilename(%q) = %q still contains ..", in, got)
+		}
 	}
 }
 
