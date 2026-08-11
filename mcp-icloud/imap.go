@@ -452,7 +452,10 @@ func extractAttachments(raw []byte) []Attachment {
 		if !ok {
 			continue
 		}
-		filename, nameErr := ah.Filename()
+		// Filename's error is not actionable: it reports a malformed
+		// Content-Type, not a bad filename, and attachmentContentType already
+		// falls back for that. An unnamed attachment is still an attachment.
+		filename, _ := ah.Filename()
 		contentType := attachmentContentType(ah)
 		data, readErr := io.ReadAll(p.Body)
 		if readErr != nil {
@@ -466,11 +469,7 @@ func extractAttachments(raw []byte) []Attachment {
 			})
 			continue
 		}
-		att := buildAttachment(sanitizeFilename(filename), contentType, data)
-		if nameErr != nil {
-			att.Reason = "filename unparseable"
-		}
-		out = append(out, att)
+		out = append(out, buildAttachment(sanitizeFilename(filename), contentType, data))
 	}
 	return out
 }

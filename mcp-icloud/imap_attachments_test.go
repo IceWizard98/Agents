@@ -121,6 +121,39 @@ func TestExtractAttachments_UnknownCharsetOnAttachmentPart(t *testing.T) {
 	}
 }
 
+// A charset label no decoder can resolve is what actually reaches the
+// IsUnknownCharset branch — the registered legacy charsets never error.
+func TestExtractAttachments_UnresolvableCharsetStillYieldsAttachment(t *testing.T) {
+	raw := buildMIME("BOUND10",
+		"Content-Type: text/plain; charset=\"x-nonexistent-42\"\r\n\r\nbody\r\n",
+		"Content-Type: application/pdf\r\n"+
+			"Content-Disposition: attachment; filename=\"a.pdf\"\r\n\r\n"+
+			"pdfbytes\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 || atts[0].Filename != "a.pdf" {
+		t.Fatalf("expected a.pdf past an unresolvable charset, got %+v", atts)
+	}
+}
+
+// A malformed Content-Type must not make a healthy attachment look failed:
+// reason is the "you did not get the bytes" channel.
+func TestExtractAttachments_MalformedContentTypeKeepsCleanReason(t *testing.T) {
+	raw := buildMIME("BOUND11",
+		"Content-Type: application/pdf; name=\r\n\r\npdfbytes\r\n",
+	)
+	atts := extractAttachments(raw)
+	if len(atts) != 1 {
+		t.Fatalf("expected 1 attachment, got %d: %+v", len(atts), atts)
+	}
+	if atts[0].Reason != "" || atts[0].Skipped {
+		t.Fatalf("healthy attachment must carry no failure reason: %+v", atts[0])
+	}
+	if atts[0].Data == "" {
+		t.Fatalf("expected data for a readable attachment")
+	}
+}
+
 func TestExtractAttachments_AttachmentWithoutFilename(t *testing.T) {
 	raw := buildMIME("BOUND8",
 		"Content-Type: application/pdf\r\n"+
