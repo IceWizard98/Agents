@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-message"
+	// Registers decoders for the legacy charsets (iso-8859-*, windows-*, …).
+	// Without it go-message rejects every non-UTF-8 mail as an unknown charset.
+	_ "github.com/emersion/go-message/charset"
 	"github.com/emersion/go-message/mail"
 )
 
@@ -168,7 +173,9 @@ func (r imapReader) Read(mailbox string, uid uint32) (MailMessage, error) {
 
 	uidSet := imap.UIDSet{}
 	uidSet.AddNum(imap.UID(uid))
-	section := &imap.FetchItemBodySection{}
+	// Peek: fetching content must not mark the message \Seen — read state is
+	// domain-meaningful here (mark_email owns it).
+	section := &imap.FetchItemBodySection{Peek: true}
 	opts := &imap.FetchOptions{
 		UID:         true,
 		Envelope:    true,
@@ -353,7 +360,7 @@ func extractText(raw []byte) string {
 		return ""
 	}
 	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
-	if err != nil {
+	if err != nil && !message.IsUnknownCharset(err) {
 		return string(raw)
 	}
 	var b strings.Builder
@@ -362,7 +369,7 @@ func extractText(raw []byte) string {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
+		if err != nil && !message.IsUnknownCharset(err) {
 			break
 		}
 		if _, ok := p.Header.(*mail.InlineHeader); ok {
@@ -374,4 +381,151 @@ func extractText(raw []byte) string {
 		return string(raw)
 	}
 	return b.String()
+}
+
+// ReadAttachments fetches the full message by UID and extracts every
+// non-inline (attachment) MIME part. A message with no attachments (or no
+// MIME structure at all) returns (nil, nil) — not an error.
+func (r imapReader) ReadAttachments(mailbox string, uid uint32) ([]Attachment, error) {
+	c, err := r.dial()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { c.Logout().Wait() }()
+
+	if _, err := c.Select(mailbox, nil).Wait(); err != nil {
+		return nil, fmt.Errorf("select %q: %w", mailbox, err)
+	}
+
+	uidSet := imap.UIDSet{}
+	uidSet.AddNum(imap.UID(uid))
+	// Peek: fetching content must not mark the message \Seen — read state is
+	// domain-meaningful here (mark_email owns it).
+	section := &imap.FetchItemBodySection{Peek: true}
+	opts := &imap.FetchOptions{
+		UID:         true,
+		BodySection: []*imap.FetchItemBodySection{section},
+	}
+	msgs, err := c.Fetch(uidSet, opts).Collect()
+	if err != nil {
+		return nil, fmt.Errorf("fetch message: %w", err)
+	}
+	if len(msgs) == 0 {
+		return nil, fmt.Errorf("no message with uid %d in %q", uid, mailbox)
+	}
+	raw := msgs[0].FindBodySection(section)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	return extractAttachments(raw), nil
+}
+
+// extractAttachments walks a raw RFC822 message and collects every part
+// whose header identifies it as an attachment (as opposed to an inline
+// body part, handled separately by extractText). Malformed MIME yields an
+// empty slice rather than an error — mirrors extractText's fallback
+// behaviour so a garbled message doesn't fail the whole call.
+func extractAttachments(raw []byte) []Attachment {
+	mr, err := mail.CreateReader(strings.NewReader(string(raw)))
+	// go-message reports an unregistered charset as an error but still returns a
+	// usable reader/part. Treating that as fatal made every legacy-charset mail
+	// (iso-8859-1 & co) report zero attachments.
+	if err != nil && !message.IsUnknownCharset(err) {
+		return nil
+	}
+	var out []Attachment
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil && !message.IsUnknownCharset(err) {
+			// Stop at the first malformed part rather than looping forever, but
+			// say so: a shorter list must not look like a complete one.
+			out = append(out, Attachment{
+				Skipped: true,
+				Reason:  fmt.Sprintf("message truncated: %v", err),
+			})
+			break
+		}
+		ah, ok := p.Header.(*mail.AttachmentHeader)
+		if !ok {
+			continue
+		}
+		// Filename's error is not actionable: it reports a malformed
+		// Content-Type, not a bad filename, and attachmentContentType already
+		// falls back for that. An unnamed attachment is still an attachment.
+		filename, _ := ah.Filename()
+		contentType := attachmentContentType(ah)
+		data, readErr := io.ReadAll(p.Body)
+		if readErr != nil {
+			// Report the part we could not decode instead of dropping it — a
+			// missing entry is indistinguishable from "there was no attachment".
+			out = append(out, Attachment{
+				Filename:    sanitizeFilename(filename),
+				ContentType: contentType,
+				Skipped:     true,
+				Reason:      fmt.Sprintf("read failed: %v", readErr),
+			})
+			continue
+		}
+		out = append(out, buildAttachment(sanitizeFilename(filename), contentType, data))
+	}
+	return out
+}
+
+// attachmentContentType reports the part's declared type. go-message returns
+// RFC 2045's text/plain default when the header is absent, which is misleading
+// for a Content-Disposition: attachment part — an undeclared attachment is a
+// binary blob, not body text.
+func attachmentContentType(ah *mail.AttachmentHeader) string {
+	if ah.Get("Content-Type") == "" {
+		return "application/octet-stream"
+	}
+	contentType, _, err := ah.ContentType()
+	if err != nil || contentType == "" {
+		return "application/octet-stream"
+	}
+	return contentType
+}
+
+// buildAttachment turns a decoded MIME part into an Attachment, applying the
+// size cutoff. Split out from extractAttachments so the size/skip decision
+// is unit-testable without constructing megabyte-scale MIME fixtures.
+func buildAttachment(filename, contentType string, data []byte) Attachment {
+	att := Attachment{
+		Filename:    filename,
+		ContentType: contentType,
+		Size:        len(data),
+	}
+	if len(data) > maxAttachmentSize {
+		att.Skipped = true
+		att.Reason = "too large"
+	} else {
+		att.Data = base64.StdEncoding.EncodeToString(data)
+	}
+	return att
+}
+
+// sanitizeFilename strips path separators, traversal sequences, and control
+// characters from an attachment filename before it's ever handed back to a
+// caller that might use it to build a filesystem path. The IMAP server is an
+// untrusted source for this string — a crafted "../../etc/passwd" filename
+// must not survive.
+func sanitizeFilename(name string) string {
+	// Control characters go first: stripping them last would let ".\x00."
+	// survive the ".." pass and then collapse back into "..".
+	name = strings.Map(func(r rune) rune {
+		if r < 32 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	name = strings.ReplaceAll(name, "/", "")
+	name = strings.ReplaceAll(name, "\\", "")
+	// Loop to a fixed point: one pass turns "..." into "." but "...." into "..".
+	for strings.Contains(name, "..") {
+		name = strings.ReplaceAll(name, "..", "")
+	}
+	return name
 }

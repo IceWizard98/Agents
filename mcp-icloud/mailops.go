@@ -145,3 +145,53 @@ func MoveEmail(m MailMover, req MoveRequest) error {
 	}
 	return m.Move(mailbox, req.UID, to)
 }
+
+// maxAttachmentSize is the cutoff above which an attachment's bytes are not
+// returned (base64 would balloon the MCP response and risk client OOM on
+// large PDFs/videos); the caller still learns it exists via Skipped/Reason.
+const maxAttachmentSize = 10 * 1024 * 1024 // 10MB
+
+// Attachment is one file attached to an email, returned by get_attachments.
+type Attachment struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int    `json:"size"`
+	Data        string `json:"data,omitempty"`
+	Skipped     bool   `json:"skipped,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+}
+
+// AttachmentReader reads attachments from one message. Hexagonal port: real
+// adapter uses IMAP, tests a fake.
+type AttachmentReader interface {
+	ReadAttachments(mailbox string, uid uint32) ([]Attachment, error)
+}
+
+// GetAttachmentsRequest is the get_attachments tool payload. UID has no
+// sensible default (0 is invalid) so it stays required; Mailbox is optional.
+type GetAttachmentsRequest struct {
+	Mailbox string `json:"mailbox,omitempty" jsonschema:"mailbox name, default INBOX"`
+	UID     uint32 `json:"uid" jsonschema:"message UID (from list_emails or search_emails)"`
+}
+
+// GetAttachments validates the request and reads all attachments of one
+// message by UID. A message with no attachments returns an empty slice, not
+// an error. The result is normalized to a non-nil empty slice so the JSON
+// response is always an array (never null), matching the documented contract.
+func GetAttachments(r AttachmentReader, req GetAttachmentsRequest) ([]Attachment, error) {
+	if req.UID == 0 {
+		return nil, fmt.Errorf("uid is required")
+	}
+	mailbox := strings.TrimSpace(req.Mailbox)
+	if mailbox == "" {
+		mailbox = defaultMailbox
+	}
+	atts, err := r.ReadAttachments(mailbox, req.UID)
+	if err != nil {
+		return nil, err
+	}
+	if atts == nil {
+		return []Attachment{}, nil
+	}
+	return atts, nil
+}

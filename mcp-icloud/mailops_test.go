@@ -110,10 +110,10 @@ func TestSearchEmails_PropagatesError(t *testing.T) {
 // ---- MarkEmail ----
 
 type fakeFlagger struct {
-	err      error
-	gotBox   string
-	gotUID   uint32
-	gotRead  bool
+	err       error
+	gotBox    string
+	gotUID    uint32
+	gotRead   bool
 	wasCalled bool
 }
 
@@ -165,10 +165,10 @@ func TestMarkEmail_PropagatesError(t *testing.T) {
 // ---- MoveEmail ----
 
 type fakeMover struct {
-	err    error
-	gotBox string
-	gotUID uint32
-	gotTo  string
+	err       error
+	gotBox    string
+	gotUID    uint32
+	gotTo     string
 	wasCalled bool
 }
 
@@ -224,6 +224,80 @@ func TestMoveEmail_RequiresDestination(t *testing.T) {
 func TestMoveEmail_PropagatesError(t *testing.T) {
 	f := &fakeMover{err: errors.New("move failed")}
 	if err := MoveEmail(f, MoveRequest{UID: 1, To: "Trash"}); err == nil {
+		t.Fatal("expected propagated error")
+	}
+}
+
+// ---- GetAttachments ----
+
+type fakeAttachmentReader struct {
+	atts      []Attachment
+	err       error
+	gotBox    string
+	gotUID    uint32
+	wasCalled bool
+}
+
+func (f *fakeAttachmentReader) ReadAttachments(mailbox string, uid uint32) ([]Attachment, error) {
+	f.wasCalled = true
+	f.gotBox, f.gotUID = mailbox, uid
+	return f.atts, f.err
+}
+
+func TestGetAttachments_OK(t *testing.T) {
+	f := &fakeAttachmentReader{
+		atts: []Attachment{{Filename: "a.pdf", ContentType: "application/pdf", Size: 3}},
+	}
+	atts, err := GetAttachments(f, GetAttachmentsRequest{UID: 42})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(atts) != 1 || atts[0].Filename != "a.pdf" {
+		t.Fatalf("wrong attachments: %+v", atts)
+	}
+	if f.gotBox != "INBOX" || f.gotUID != 42 {
+		t.Fatalf("wrong args: box=%s uid=%d", f.gotBox, f.gotUID)
+	}
+}
+
+func TestGetAttachments_CustomMailbox(t *testing.T) {
+	f := &fakeAttachmentReader{}
+	if _, err := GetAttachments(f, GetAttachmentsRequest{Mailbox: "Sent", UID: 7}); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if f.gotBox != "Sent" {
+		t.Fatalf("mailbox = %q, want Sent", f.gotBox)
+	}
+}
+
+func TestGetAttachments_RejectsZeroUID(t *testing.T) {
+	f := &fakeAttachmentReader{}
+	if _, err := GetAttachments(f, GetAttachmentsRequest{UID: 0}); err == nil {
+		t.Fatal("expected error for uid=0")
+	}
+	if f.wasCalled {
+		t.Fatal("reader must not be called with invalid uid")
+	}
+}
+
+func TestGetAttachments_EmptyListIsNotError(t *testing.T) {
+	f := &fakeAttachmentReader{} // no attachments, returns nil slice
+	atts, err := GetAttachments(f, GetAttachmentsRequest{UID: 9})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(atts) != 0 {
+		t.Fatalf("expected empty result, got %+v", atts)
+	}
+	// Must be non-nil so the JSON response is an empty array, never null.
+	if atts == nil {
+		t.Fatal("expected non-nil empty slice, got nil")
+	}
+}
+
+func TestGetAttachments_PropagatesError(t *testing.T) {
+	f := &fakeAttachmentReader{err: errors.New("fetch failed")}
+	if _, err := GetAttachments(f, GetAttachmentsRequest{UID: 5}); err == nil {
 		t.Fatal("expected propagated error")
 	}
 }

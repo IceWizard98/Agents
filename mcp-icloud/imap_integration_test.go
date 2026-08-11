@@ -36,6 +36,24 @@ func TestIntegration_IMAP_ListAndRead(t *testing.T) {
 		t.Fatalf("Read uid=%d failed: %v", headers[0].UID, err)
 	}
 	t.Logf("read uid=%d subject=%q body=%d bytes", msg.UID, msg.Subject, len(msg.Body))
+
+	// Exercise attachment extraction end to end. A message may legitimately
+	// have zero attachments, so a non-error + empty list is a valid pass;
+	// a message with attachments must report sane sizes/content types.
+	atts, err := r.ReadAttachments("INBOX", headers[0].UID)
+	if err != nil {
+		t.Fatalf("ReadAttachments uid=%d failed: %v", headers[0].UID, err)
+	}
+	t.Logf("uid=%d returned %d attachments", headers[0].UID, len(atts))
+	for i, a := range atts {
+		if a.Size < 0 {
+			t.Fatalf("attachment[%d] has negative size: %+v", i, a)
+		}
+		if a.ContentType == "" {
+			t.Fatalf("attachment[%d] has empty content_type: %+v", i, a)
+		}
+		t.Logf("  [%d] %q %s %d bytes skipped=%v", i, a.Filename, a.ContentType, a.Size, a.Skipped)
+	}
 }
 
 func TestIntegration_IMAP_Mailboxes(t *testing.T) {
