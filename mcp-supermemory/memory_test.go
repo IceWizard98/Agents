@@ -147,6 +147,113 @@ func TestSearchMemory_HappyPath_PostsSearch(t *testing.T) {
 	}
 }
 
+// ---- DeleteMemory ----
+
+// fakeDeleter is a test double for the Deleter port.
+type fakeDeleter struct {
+	gotPath string
+	res     []byte
+	err     error
+	called  bool
+}
+
+func (f *fakeDeleter) Delete(_ context.Context, path string) ([]byte, error) {
+	f.called = true
+	f.gotPath = path
+	return f.res, f.err
+}
+
+func TestDeleteMemory_HappyPath_DeletesDocument(t *testing.T) {
+	fd := &fakeDeleter{res: []byte(`{"deleted":true}`)}
+	out, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: "doc_123"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fd.called {
+		t.Fatal("deleter must be called")
+	}
+	if fd.gotPath != "/v3/documents/doc_123" {
+		t.Errorf("path = %q, want /v3/documents/doc_123", fd.gotPath)
+	}
+	if out.Response != `{"deleted":true}` {
+		t.Errorf("response = %q", out.Response)
+	}
+}
+
+func TestDeleteMemory_TrimsDocumentID(t *testing.T) {
+	fd := &fakeDeleter{res: []byte(`{}`)}
+	if _, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: "  doc_9  "}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if fd.gotPath != "/v3/documents/doc_9" {
+		t.Errorf("path = %q, want trimmed /v3/documents/doc_9", fd.gotPath)
+	}
+}
+
+func TestDeleteMemory_EmptyID_Errors(t *testing.T) {
+	fd := &fakeDeleter{res: []byte(`{}`)}
+	if _, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: "   "}); err == nil {
+		t.Fatal("expected error for empty document_id")
+	}
+	if fd.called {
+		t.Fatal("deleter must not be called for empty document_id")
+	}
+}
+
+func TestDeleteMemory_RejectsPathTraversal(t *testing.T) {
+	cases := []string{
+		"../../etc/passwd",
+		"a/b/c",
+		"..%2F..%2Fetc",
+		"doc\\id",
+		"doc\u0000id",
+		"/v3/documents/other",
+		".",
+		"..",
+	}
+	for _, id := range cases {
+		fd := &fakeDeleter{res: []byte(`{}`)}
+		if _, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: id}); err == nil {
+			t.Errorf("expected error for document_id %q", id)
+		}
+		if fd.called {
+			t.Errorf("deleter must not be called for document_id %q", id)
+		}
+	}
+}
+
+// custom_id is free-form on the add_memory side, so delete must cope with the
+// characters add accepts (":", "@", "#", spaces) instead of rejecting them —
+// otherwise those memories would be undeletable. They are escaped, not banned.
+func TestDeleteMemory_EscapesCustomIDCharacters(t *testing.T) {
+	cases := map[string]string{
+		"conv:42":        "/v3/documents/conv:42",
+		"doc with space": "/v3/documents/doc%20with%20space",
+		"user@host":      "/v3/documents/user@host",
+		"thread#1":       "/v3/documents/thread%231",
+		"città":          "/v3/documents/citt%C3%A0",
+		"release+notes":  "/v3/documents/release%2Bnotes",
+	}
+	for id, wantPath := range cases {
+		fd := &fakeDeleter{res: []byte(`{}`)}
+		if _, err := DeleteMemory(context.Background(), fd, DeleteRequest{DocumentID: id}); err != nil {
+			t.Errorf("document_id %q: unexpected error: %v", id, err)
+			continue
+		}
+		if fd.gotPath != wantPath {
+			t.Errorf("document_id %q: path = %q, want %q", id, fd.gotPath, wantPath)
+		}
+	}
+}
+
+func TestDeleteMemory_DeleterError_Propagated(t *testing.T) {
+	sentinel := errors.New("connection refused")
+	_, err := DeleteMemory(context.Background(), &fakeDeleter{err: sentinel}, DeleteRequest{DocumentID: "doc_1"})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("error should wrap deleter error, got %v", err)
+	}
+}
+
 func TestSearchMemory_EmptyQuery_Errors(t *testing.T) {
 	if _, err := SearchMemory(context.Background(), &fakePoster{}, "hermes", SearchRequest{Query: " "}); err == nil {
 		t.Fatal("expected error for empty query")
@@ -275,6 +382,71 @@ func TestSuperMemory_Post_CapsResponseBody(t *testing.T) {
 	}
 	if len(data) != maxResponseBytes {
 		t.Errorf("response not capped: got %d bytes, want %d", len(data), maxResponseBytes)
+	}
+}
+
+func TestSuperMemory_Delete_SendsDeleteMethodAndAuth(t *testing.T) {
+	var gotMethod, gotAuth, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		io.WriteString(w, `{"deleted":true}`)
+	}))
+	defer srv.Close()
+
+	sm := superMemory{baseURL: srv.URL, keyEnv: "secret", client: srv.Client()}
+	data, err := sm.Delete(context.Background(), "/v3/documents/doc_1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("method = %q, want DELETE", gotMethod)
+	}
+	if gotPath != "/v3/documents/doc_1" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Errorf("Authorization = %q", gotAuth)
+	}
+	if string(data) != `{"deleted":true}` {
+		t.Errorf("data = %q", string(data))
+	}
+}
+
+func TestSuperMemory_Delete_RefreshesKeyOn401(t *testing.T) {
+	f := t.TempDir() + "/api-key"
+	if err := os.WriteFile(f, []byte("goodkey\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer goodkey" {
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":"Unauthorized"}`)
+			return
+		}
+		io.WriteString(w, `{"deleted":true}`)
+	}))
+	defer srv.Close()
+
+	// keyCache starts stale; file has current key. First DELETE 401s, refresh
+	// reads the file, retry succeeds.
+	sm := superMemory{baseURL: srv.URL, keyFile: f, keyCache: "stalekey", client: srv.Client()}
+	data, err := sm.Delete(context.Background(), "/v3/documents/doc_1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(data) != `{"deleted":true}` {
+		t.Errorf("data = %q", string(data))
+	}
+	if calls != 2 {
+		t.Errorf("want 2 calls (401 then retry), got %d", calls)
 	}
 }
 

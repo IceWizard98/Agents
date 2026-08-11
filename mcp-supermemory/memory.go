@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -26,6 +27,12 @@ const maxResponseBytes = 512 * 1024
 // and return the raw response body. The real adapter talks HTTP; tests fake it.
 type Poster interface {
 	Post(ctx context.Context, path string, payload any) ([]byte, error)
+}
+
+// Deleter is the hexagonal port for removing a document from supermemory.
+// Delete sends an HTTP DELETE to the given path (no JSON body).
+type Deleter interface {
+	Delete(ctx context.Context, path string) ([]byte, error)
 }
 
 // superMemory is the real adapter against a self-hosted supermemory server
@@ -51,10 +58,20 @@ func (s *superMemory) Post(ctx context.Context, path string, payload any) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("marshal supermemory request: %w", err)
 	}
-	// One retry: on 401 the cached key may be stale (server regenerated it after a
-	// data-volume reset) — refresh from the key file and try once more.
+	return s.send(ctx, http.MethodPost, path, body)
+}
+
+// Delete sends an HTTP DELETE to path (no body) for removing a document.
+func (s *superMemory) Delete(ctx context.Context, path string) ([]byte, error) {
+	return s.send(ctx, http.MethodDelete, path, nil)
+}
+
+// send issues one request with the given HTTP method and body, retrying once
+// on 401 when the cached key may be stale (server regenerated it after a
+// data-volume reset) — refresh from the key file and try once more.
+func (s *superMemory) send(ctx context.Context, method, path string, body []byte) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
-		data, status, err := s.do(ctx, path, body)
+		data, status, err := s.do(ctx, method, path, body)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +87,7 @@ func (s *superMemory) Post(ctx context.Context, path string, payload any) ([]byt
 }
 
 // do sends one request and returns (body, status, transport-error).
-func (s *superMemory) do(ctx context.Context, path string, body []byte) ([]byte, int, error) {
+func (s *superMemory) do(ctx context.Context, method, path string, body []byte) ([]byte, int, error) {
 	// Bound the request so a stalled backend can't hang the tool call forever,
 	// while still composing with the inbound MCP ctx (cancel wins whichever first).
 	if s.timeout > 0 {
@@ -78,7 +95,7 @@ func (s *superMemory) do(ctx context.Context, path string, body []byte) ([]byte,
 		ctx, cancel = context.WithTimeout(ctx, s.timeout)
 		defer cancel()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, fmt.Errorf("build supermemory request: %w", err)
 	}
@@ -249,4 +266,57 @@ func firstNonEmpty(a, b string) string {
 		return s
 	}
 	return strings.TrimSpace(b)
+}
+
+// DeleteRequest is the delete_memory tool payload.
+type DeleteRequest struct {
+	// DocumentID is the document id (or customId) to remove. Required. It
+	// becomes a URL path segment ("/v3/documents/{id}"), so DeleteMemory rejects
+	// separators and escapes the rest before any HTTP call.
+	DocumentID string `json:"document_id" jsonschema:"document id or customId to delete (from add_memory or search_memory)"`
+}
+
+// DeleteResult carries supermemory's raw delete response back to the model.
+type DeleteResult struct {
+	Response string `json:"response"`
+}
+
+// DeleteMemory validates input and deletes one document via
+// DELETE /v3/documents/{id}. The endpoint accepts the document id OR a
+// customId (see supermemory document-operations docs). Deletes are permanent —
+// there is no undo.
+//
+// The id is used as a literal path segment, so anything that could change the
+// route is rejected outright: "/" and "\" (segment separators), "%" (a
+// pre-encoded "%2F" may be normalised back by the server's reverse proxy,
+// silently deleting a different document) and control characters. Everything
+// else is URL-escaped rather than rejected — add_memory accepts any custom_id
+// (":", "@", spaces, non-ASCII), and banning those here would make such
+// memories undeletable.
+func DeleteMemory(ctx context.Context, d Deleter, in DeleteRequest) (DeleteResult, error) {
+	id := strings.TrimSpace(in.DocumentID)
+	if id == "" {
+		return DeleteResult{}, fmt.Errorf("document_id is required")
+	}
+	// Reject the dot segments whose decoded forms collide with path traversal.
+	// "." and ".." as a whole id would resolve to the collection / its parent
+	// via the path normaliser, so treat them as invalid instead of a resource.
+	if id == "." || id == ".." {
+		return DeleteResult{}, fmt.Errorf("invalid document_id: %q is not a document identifier", id)
+	}
+	for _, r := range id {
+		if r == '/' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return DeleteResult{}, fmt.Errorf("invalid document_id: %q may not contain '/', '\\', '%%' or control characters", id)
+		}
+	}
+	// Deletes are irreversible and the backend keeps no undo, so leave a trail.
+	slog.Info("delete_memory", "document_id", id)
+	// PathEscape leaves "+" literal; a backend that form-decodes the segment
+	// would read it as a space and delete a different document. Escape it too.
+	seg := strings.ReplaceAll(url.PathEscape(id), "+", "%2B")
+	data, err := d.Delete(ctx, "/v3/documents/"+seg)
+	if err != nil {
+		return DeleteResult{}, fmt.Errorf("delete memory: %w", err)
+	}
+	return DeleteResult{Response: string(data)}, nil
 }
